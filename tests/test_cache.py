@@ -27,7 +27,7 @@ def test_cache_reuses_unchanged_document(tmp_path: Path) -> None:
 def test_cache_reextracts_and_replaces_changed_source(tmp_path: Path) -> None:
     source = tmp_path / "record.txt"
     source.write_text("first version", encoding="utf-8")
-    cache = ExtractionCache(tmp_path, "docling-v1", app_data_root=tmp_path / ".cache")
+    cache = ExtractionCache(tmp_path, "vlm-v1", app_data_root=tmp_path / ".cache")
     results = iter(["first extraction", "updated extraction"])
 
     first = cache.get_or_extract(source, lambda _path: next(results))
@@ -46,8 +46,8 @@ def test_cache_reextracts_and_replaces_changed_source(tmp_path: Path) -> None:
 def test_cache_invalidates_when_extractor_identity_changes(tmp_path: Path) -> None:
     source = tmp_path / "record.txt"
     source.write_text("source text", encoding="utf-8")
-    old_cache = ExtractionCache(tmp_path, "docling-v1", app_data_root=tmp_path / ".cache")
-    new_cache = ExtractionCache(tmp_path, "docling-v2", app_data_root=tmp_path / ".cache")
+    old_cache = ExtractionCache(tmp_path, "vlm-v1", app_data_root=tmp_path / ".cache")
+    new_cache = ExtractionCache(tmp_path, "vlm-v2", app_data_root=tmp_path / ".cache")
     old_cache.get_or_extract(source, lambda _path: "old extraction")
 
     result = new_cache.get_or_extract(source, lambda _path: "new extraction")

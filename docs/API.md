@@ -31,7 +31,7 @@ If the local service cannot be reached, `ollama_available` is false and
 
 It returns the selected root, GEDCOM and document counts, counts grouped by
 file type, and `has_gedcom_baseline`. This structural preview does not start
-OCR or model inference. An invalid or unreadable path returns HTTP 400 with a
+transcription or model inference. An invalid or unreadable path returns HTTP 400 with a
 path-specific `detail`.
 
 ## Start and monitor a pipeline
@@ -41,9 +41,15 @@ path-specific `detail`.
 ```json
 {
   "path": "<absolute-local-directory-path>",
-  "model": "qwen2.5:14b"
+  "model": "qwen2.5:14b",
+  "vision_model": "qwen2.5vl:7b"
 }
 ```
+
+`vision_model` is an installed Ollama model used to transcribe PDFs and images.
+It is optional when the folder contains only GEDCOM and text notes; if scanned
+documents are found and it is missing or not installed, the run fails before
+extraction with an explicit error event.
 
 On acceptance it returns HTTP 202. This operation scans the folder and parses
 GEDCOM first, publishing each GEDCOM person before document extraction starts.

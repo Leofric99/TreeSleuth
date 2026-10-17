@@ -25,6 +25,7 @@ class DirectoryAnalyzeResponse(BaseModel):
 class PipelineStartRequest(BaseModel):
     path: Path
     model: str = Field(min_length=1)
+    vision_model: str | None = None
 
 
 class StoryGenerationRequest(BaseModel):

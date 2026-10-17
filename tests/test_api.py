@@ -49,9 +49,9 @@ class FakeAnalyzer:
         )
 
 
-class NoOcrExtractor:
+class NoTranscriptionExtractor:
     def extract_text(self, _source: Path) -> str:
-        raise AssertionError("Directory preview must not start OCR")
+        raise AssertionError("Directory preview must not start transcription")
 
 
 class FakeTextExtractor:
@@ -63,7 +63,7 @@ def client_for(analyzer: FakeAnalyzer, extractor=None, app_data_root: Path | Non
     coordinator = PipelineCoordinator(
         settings=Settings(max_workers=1),
         analyzer=analyzer,
-        extractor=extractor or NoOcrExtractor(),
+        extractor=extractor or NoTranscriptionExtractor(),
         app_data_root=app_data_root,
     )
     return TestClient(create_app(coordinator))
@@ -87,7 +87,7 @@ def test_system_check_reports_ollama_unavailable() -> None:
     assert response.json()["models"] == []
 
 
-def test_directory_preview_is_structural_and_does_not_run_ocr(tmp_path: Path) -> None:
+def test_directory_preview_is_structural_and_does_not_run_transcription(tmp_path: Path) -> None:
     (tmp_path / "nested").mkdir()
     (tmp_path / "nested" / "family.ged").write_text("0 HEAD", encoding="utf-8")
     (tmp_path / "nested" / "letter.pdf").write_bytes(b"pdf")

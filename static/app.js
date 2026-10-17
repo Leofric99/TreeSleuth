@@ -12,6 +12,7 @@ const state = {
 const elements = {
   serviceStatus: document.querySelector("#serviceStatus"),
   modelSelect: document.querySelector("#modelSelect"),
+  visionModelSelect: document.querySelector("#visionModelSelect"),
   directoryPath: document.querySelector("#directoryPath"),
   refreshModels: document.querySelector("#refreshModels"),
   previewDirectory: document.querySelector("#previewDirectory"),
@@ -77,32 +78,45 @@ async function requestJson(url, options = {}) {
   return data;
 }
 
+let previewHasScans = false;
+
+function fillModelSelect(select, placeholder, models) {
+  select.replaceChildren();
+  select.add(new Option(placeholder, ""));
+  for (const model of models) {
+    select.add(new Option(model, model));
+  }
+  select.disabled = false;
+}
+
+function disableModelSelects(label) {
+  for (const select of [elements.modelSelect, elements.visionModelSelect]) {
+    select.replaceChildren();
+    select.add(new Option(label, ""));
+    select.disabled = true;
+  }
+}
+
 async function checkOllama() {
   clearError();
   elements.refreshModels.disabled = true;
   setPill(elements.serviceStatus, "Checking local model…");
   try {
     const result = await requestJson("/api/system-check");
-    elements.modelSelect.replaceChildren();
     if (!result.ollama_available) {
-      elements.modelSelect.add(new Option("Ollama unavailable", ""));
-      elements.modelSelect.disabled = true;
+      disableModelSelects("Ollama unavailable");
       setPill(elements.serviceStatus, "Ollama unavailable", "error");
       showError(result.error || "Could not connect to local Ollama.");
       return;
     }
     if (!result.models.length) {
-      elements.modelSelect.add(new Option("No local models found", ""));
-      elements.modelSelect.disabled = true;
+      disableModelSelects("No local models found");
       setPill(elements.serviceStatus, "No local models", "warning");
       elements.actionMessage.textContent = "Install a model in Ollama to continue.";
       return;
     }
-    elements.modelSelect.add(new Option("Select a model", ""));
-    for (const model of result.models) {
-      elements.modelSelect.add(new Option(model, model));
-    }
-    elements.modelSelect.disabled = false;
+    fillModelSelect(elements.modelSelect, "Select a model", result.models);
+    fillModelSelect(elements.visionModelSelect, "Select a vision model", result.models);
     elements.actionMessage.textContent = "";
     setPill(elements.serviceStatus, "Local Ollama ready", "success");
   } catch (error) {
@@ -115,7 +129,12 @@ async function checkOllama() {
 }
 
 function updateStartButton() {
-  elements.startPipeline.disabled = !elements.directoryPath.value.trim() || !elements.modelSelect.value;
+  const needsVision = previewHasScans && !elements.visionModelSelect.value;
+  elements.startPipeline.disabled =
+    !elements.directoryPath.value.trim() || !elements.modelSelect.value || needsVision;
+  if (needsVision && elements.modelSelect.value) {
+    elements.actionMessage.textContent = "Select a vision model to transcribe the scanned documents.";
+  }
 }
 
 function renderPreview(summary) {
@@ -152,7 +171,9 @@ async function previewDirectory() {
       body: JSON.stringify({ path: elements.directoryPath.value.trim() }),
     });
     renderPreview(result);
-    elements.actionMessage.textContent = "Folder preview ready. OCR has not started.";
+    previewHasScans = (result.files_by_type.pdf || 0) + (result.files_by_type.image || 0) > 0;
+    elements.actionMessage.textContent = "Folder preview ready. Transcription has not started.";
+    updateStartButton();
   } catch (error) {
     showError(error.message);
     elements.actionMessage.textContent = "";
@@ -466,6 +487,7 @@ async function startPipeline() {
       body: JSON.stringify({
         path: elements.directoryPath.value.trim(),
         model: elements.modelSelect.value,
+        vision_model: elements.visionModelSelect.value || null,
       }),
     });
     elements.actionMessage.textContent = `Run ${run.run_id} started.`;
@@ -570,8 +592,12 @@ elements.surnameVariant.addEventListener("change", () => {
   renderSurnameMappingControls();
 });
 elements.displaySurname.addEventListener("change", renderSurnameMappingControls);
-elements.directoryPath.addEventListener("input", updateStartButton);
+elements.directoryPath.addEventListener("input", () => {
+  previewHasScans = false;
+  updateStartButton();
+});
 elements.modelSelect.addEventListener("change", updateStartButton);
+elements.visionModelSelect.addEventListener("change", updateStartButton);
 elements.clearLog.addEventListener("click", () => elements.eventFeed.replaceChildren());
 elements.closeResult.addEventListener("click", () => elements.resultPanel.classList.add("hidden"));
 checkOllama();

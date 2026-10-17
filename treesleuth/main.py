@@ -74,7 +74,7 @@ def create_app(coordinator: PipelineCoordinator | None = None) -> FastAPI:
     @app.post("/api/run-pipeline", response_model=PipelineStartResponse, status_code=202)
     async def start_pipeline(request: PipelineStartRequest) -> PipelineStartResponse:
         try:
-            run = await pipeline.start(request.path, request.model)
+            run = await pipeline.start(request.path, request.model, request.vision_model)
         except PathValidationError as exc:
             logger.warning("API pipeline start rejected path %s: %s", request.path, exc, exc_info=True)
             raise HTTPException(status_code=400, detail=str(exc)) from exc

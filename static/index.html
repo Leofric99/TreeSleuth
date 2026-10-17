@@ -28,7 +28,7 @@
           </div>
           <button id="refreshModels" class="button button-secondary" type="button">Check Ollama</button>
         </div>
-        <div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_16rem]">
+        <div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_16rem_16rem]">
           <label class="grid gap-2 text-sm font-medium text-slate-300" for="directoryPath">
             Folder path
             <input id="directoryPath" class="field" type="text" autocomplete="off"
@@ -37,6 +37,12 @@
           <label class="grid gap-2 text-sm font-medium text-slate-300" for="modelSelect">
             Local Ollama model
             <select id="modelSelect" class="field" disabled>
+              <option value="">Check Ollama to load models</option>
+            </select>
+          </label>
+          <label class="grid gap-2 text-sm font-medium text-slate-300" for="visionModelSelect">
+            Vision model (transcription)
+            <select id="visionModelSelect" class="field" disabled>
               <option value="">Check Ollama to load models</option>
             </select>
           </label>

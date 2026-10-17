@@ -346,3 +346,54 @@ async def test_generate_all_continues_after_a_person_without_evidence_fails(
     assert any(event.event == "warning" for event in events)
     assert events[-1].event == "complete"
     await coordinator.shutdown()
+
+async def _run_to_end(coordinator: PipelineCoordinator, run: RunRecord) -> None:
+    assert run.task is not None
+    await run.task
+    await coordinator.shutdown()
+
+
+def scanned_folder(root: Path) -> None:
+    research_folder(root)
+    (root / "records" / "register.png").write_bytes(b"fixture")
+
+
+@pytest.mark.asyncio
+async def test_scanned_documents_require_a_vision_model(tmp_path: Path) -> None:
+    scanned_folder(tmp_path)
+    coordinator = PipelineCoordinator(settings=Settings(max_workers=1), analyzer=FakeAnalyzer())
+    run = await coordinator.start(tmp_path, "local-model")
+    await _run_to_end(coordinator, run)
+
+    assert run.status == "failed"
+    assert "Select a vision model" in (run.error or "")
+
+
+@pytest.mark.asyncio
+async def test_missing_vision_model_fails_before_extraction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scanned_folder(tmp_path)
+
+    async def fake_ensure(_settings, model: str) -> None:
+        raise pipeline_module.DocumentExtractionError(f"Vision model is not installed locally: {model}")
+
+    monkeypatch.setattr(pipeline_module, "ensure_vision_model_available", fake_ensure)
+    coordinator = PipelineCoordinator(settings=Settings(max_workers=1), analyzer=FakeAnalyzer())
+    run = await coordinator.start(tmp_path, "local-model", "absent-vision")
+    await _run_to_end(coordinator, run)
+
+    assert run.status == "failed"
+    assert "absent-vision" in (run.error or "")
+
+
+@pytest.mark.asyncio
+async def test_text_only_runs_need_no_vision_model(tmp_path: Path) -> None:
+    research_folder(tmp_path)
+    coordinator = PipelineCoordinator(settings=Settings(max_workers=1), analyzer=FakeAnalyzer())
+    run = await coordinator.start(tmp_path, "local-model")
+    await _run_to_end(coordinator, run)
+
+    assert run.status == "completed"
+    assert run.vision_model is None

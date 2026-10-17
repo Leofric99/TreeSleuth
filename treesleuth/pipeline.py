@@ -24,7 +24,13 @@ from treesleuth.entity_resolution import (
     cluster_without_gedcom,
     correlate_documents,
 )
-from treesleuth.extraction import DoclingExtractor, DocumentExtractionError
+from treesleuth.extraction import (
+    DocumentExtractionError,
+    TEXT_SUFFIXES,
+    VlmExtractor,
+    ensure_vision_model_available,
+    vlm_extraction_identity,
+)
 from treesleuth.gedcom import GedcomIndex, IndividualRecord, parse_gedcom_files
 from treesleuth.models import (
     PipelineEvent,
@@ -86,6 +92,7 @@ class RunRecord:
     root: Path
     model: str
     event_limit: int
+    vision_model: str | None = None
     status: PipelineStatus = "queued"
     events: deque[PipelineEvent] = field(default_factory=deque)
     sequence: int = 0
@@ -146,7 +153,7 @@ class PipelineCoordinator:
     def __init__(
         self,
         settings: Settings | None = None,
-        extractor: DoclingExtractor | None = None,
+        extractor: Callable[..., object] | object | None = None,
         analyzer: OllamaAnalyzer | None = None,
         scanner: Callable[[str | Path], DirectoryScan] = scan_directory,
         gedcom_parser: Callable[[list[Path]], GedcomIndex] = parse_gedcom_files,
@@ -154,7 +161,7 @@ class PipelineCoordinator:
         app_data_root: Path | None = None,
     ) -> None:
         self.settings = settings or get_settings()
-        self.extractor = extractor or DoclingExtractor()
+        self.extractor = extractor
         self.analyzer = analyzer or OllamaAnalyzer(self.settings)
         self.scanner = scanner
         self.gedcom_parser = gedcom_parser
@@ -171,7 +178,12 @@ class PipelineCoordinator:
         self._lock = asyncio.Lock()
         self._executor = ThreadPoolExecutor(max_workers=self.settings.max_workers)
 
-    async def start(self, path: str | Path, model: str) -> RunRecord:
+    async def start(
+        self,
+        path: str | Path,
+        model: str,
+        vision_model: str | None = None,
+    ) -> RunRecord:
         root = validate_research_root(path)
         if not model.strip():
             raise ValueError("A local Ollama model must be selected")
@@ -183,6 +195,7 @@ class PipelineCoordinator:
                 run_id=str(uuid4()),
                 root=root,
                 model=model.strip(),
+                vision_model=(vision_model or "").strip() or None,
                 event_limit=self.settings.max_run_events,
                 status="running",
             )
@@ -442,7 +455,43 @@ class PipelineCoordinator:
         run: RunRecord,
         scan: DirectoryScan,
     ) -> list[ResearchDocument]:
-        cache = self.cache_factory(run.root, "treesleuth-docling-extraction-v1")
+        has_scanned = any(
+            item.path.suffix.casefold() not in TEXT_SUFFIXES for item in scan.document_files
+        )
+        extractor = self.extractor
+        identity = "treesleuth-injected-extraction"
+        if extractor is None:
+            if has_scanned:
+                if not run.vision_model:
+                    raise DocumentExtractionError(
+                        "Select a vision model to transcribe the PDF and image documents in this folder"
+                    )
+                await run.publish(
+                    "stage",
+                    "Parsing Records",
+                    f"Checking vision model availability: {run.vision_model}",
+                )
+                await ensure_vision_model_available(self.settings, run.vision_model)
+            loop = asyncio.get_running_loop()
+
+            def report_page(source: Path, page: int) -> None:
+                asyncio.run_coroutine_threadsafe(
+                    run.publish(
+                        "file",
+                        "Parsing Records",
+                        f"Transcribing page {page} of {source.name}",
+                        source_path=str(source),
+                    ),
+                    loop,
+                )
+
+            extractor = VlmExtractor(
+                self.settings,
+                run.vision_model,
+                on_page=report_page,
+            )
+            identity = vlm_extraction_identity(self.settings, run.vision_model or "")
+        cache = self.cache_factory(run.root, identity)
         documents: list[ResearchDocument] = []
         total = len(scan.document_files)
         for index, discovered in enumerate(scan.document_files, start=1):
@@ -460,7 +509,7 @@ class PipelineCoordinator:
                     str(discovered.path),
                     cache.get_or_extract,
                     discovered.path,
-                    self.extractor.extract_text,
+                    extractor.extract_text,
                 )
                 text = getattr(cached, "text", None)
                 if not isinstance(text, str) or not text.strip():

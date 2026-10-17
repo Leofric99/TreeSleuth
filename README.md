@@ -11,13 +11,15 @@ local Ollama model.
 - Ollama installed and running locally for model-assisted analysis
 - A local Ollama model with enough memory for its selected size; for example,
   `qwen2.5:14b`
+- For scanned PDFs and images, a local Ollama vision-language model (for
+  example `qwen2.5vl:7b` or `llama3.2-vision`); you choose it in the dashboard
 
-The application supports Windows, macOS, and Linux. OCR automatically selects
-CUDA or Apple MPS when the installed PyTorch build supports an available
-accelerator, and otherwise uses CPU. Accelerator errors retry on CPU. NVIDIA
-GPU use requires a CUDA-enabled PyTorch build; installing the default CPU-only
-PyTorch package does not enable CUDA. Research files and analysis stay on the
-local machine.
+The application supports Windows, macOS, and Linux. Document transcription and
+story generation both run through your local Ollama service, so GPU
+acceleration is whatever Ollama provides (NVIDIA CUDA, AMD ROCm, or Apple
+Metal); TreeSleuth needs no separate GPU setup and logs a warning when Ollama
+reports a model is not fully on the GPU. Research files and analysis stay on
+the local machine.
 
 ## Setup
 
@@ -28,19 +30,6 @@ py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 ```
-
-For NVIDIA GPU OCR on Windows, replace the CPU-only PyTorch build installed by
-the base dependencies with a CUDA-enabled build compatible with your Python
-version and NVIDIA driver. For this project environment (Python 3.14 and a
-CUDA 13-capable driver), the tested command is:
-
-```powershell
-python -m pip install torch==2.14.1+cu130 --index-url https://download.pytorch.org/whl/cu130
-```
-
-Use the [official PyTorch installer selector](https://pytorch.org/get-started/locally/)
-if your Python version or driver needs a different CUDA build. TreeSleuth will
-automatically use CUDA when PyTorch detects it and fall back to CPU otherwise.
 
 On macOS or Linux:
 
@@ -55,10 +44,20 @@ the local Ollama service, and download a model. For example:
 
 ```sh
 ollama pull qwen2.5:14b
+ollama pull qwen2.5vl:7b
 ```
 
-The model selector will use models available from the local Ollama service.
-Choose a smaller installed model if available memory is limited.
+The dashboard has two selectors that list the models installed in the local
+Ollama service: the story model, and the vision model used to transcribe PDFs
+and images. Choose smaller installed models if available memory is limited.
+A vision model is only required when the research folder contains PDFs or
+images.
+
+Optional environment variables tune transcription: `TREESLEUTH_VLM_HOST`
+(defaults to `OLLAMA_HOST`), `TREESLEUTH_VLM_TIMEOUT_SECONDS` (per page,
+default 300), `TREESLEUTH_VLM_MAX_IMAGE_SIDE` (default 2048 pixels),
+`TREESLEUTH_VLM_PDF_DPI` (default 200), and `TREESLEUTH_VLM_PROMPT` (replaces
+the transcription prompt).
 
 ## Run
 
@@ -79,7 +78,7 @@ API operations, response shapes, and server-sent event names are documented in
 
 Open `http://127.0.0.1:8000` after starting the service. Check Ollama, enter a
 research-folder path, preview the directory workload, choose an installed
-model, and start analysis. TreeSleuth loads GEDCOM people first, then extracts
+story model and (for scanned records) a vision model, and start analysis. TreeSleuth loads GEDCOM people first, then extracts
 and correlates documents without generating life stories. People are grouped
 and sorted by surname; use the surname mapping controls to display spelling
 variants under one surname. These mappings are saved under `.cache` for that
@@ -104,8 +103,8 @@ secure a different network deployment.
 
 The directory trawler searches nested folders for `.ged` family trees and
 research documents ending in `.pdf`, `.jpg`, `.jpeg`, `.png`, `.tif`, `.tiff`,
-`.txt`, `.md`, or `.markdown`. PDF and image records use Docling OCR and
-layout-aware text extraction; plain-text and Markdown notes are read directly.
+`.txt`, `.md`, or `.markdown`. PDF and image pages are rendered locally and
+transcribed by the vision model you select; plain-text and Markdown notes are read directly.
 The application stores extracted text and generated results in the repository's
 gitignored `.cache` directory and excludes `.cache`, legacy `.tree_cache`, and
 `output` folders from later scans. A root-specific cache namespace prevents
@@ -115,7 +114,7 @@ The selected research folder is read but not modified by TreeSleuth. If it
 contains the repository, the repository's own `.cache` is the only allowed
 application-managed write inside it; source discovery still excludes that
 directory. Cache entries are reused only when the source content and extractor
-identity match. Changed files are extracted again, and cache read/write
+identity (including the vision model, prompt, and render settings) match. Changed files are extracted again, and cache read/write
 problems are reported while fresh extraction continues when possible.
 
 An unreadable, empty, corrupt, or unsupported file is reported as an
@@ -123,12 +122,13 @@ individual processing failure; it does not erase successful results from other
 files. GEDCOM parsing failures are likewise reported per tree while other
 valid family trees remain available for analysis.
 
-OCR can take a while on large PDFs or image files, especially on CPU. The live
-event feed reports the document being processed and emits elapsed-time updates
-while extraction is still running. A `RapidOCR returned empty result` message
-means OCR found no text in a page or image; by itself it does not stop the
-pipeline. If the whole document contains no readable text, TreeSleuth reports
-that file as a warning and continues with the remaining documents.
+Transcription can take a while on large PDFs or image files, especially if
+Ollama runs the model on CPU. The live event feed reports the document and page
+being transcribed and emits elapsed-time updates while extraction is still
+running. If a model call fails or times out, or a document contains no readable
+text, TreeSleuth reports that file as a warning and continues with the
+remaining documents. Handwriting transcribed by a model can contain errors;
+unreadable words are marked `[illegible]`.
 
 ## Reviewing analysis
 
