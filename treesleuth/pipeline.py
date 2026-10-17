@@ -24,13 +24,6 @@ from treesleuth.entity_resolution import (
     cluster_without_gedcom,
     correlate_documents,
 )
-from treesleuth.extraction import (
-    DocumentExtractionError,
-    TEXT_SUFFIXES,
-    VlmExtractor,
-    ensure_vision_model_available,
-    vlm_extraction_identity,
-)
 from treesleuth.gedcom import GedcomIndex, IndividualRecord, parse_gedcom_files
 from treesleuth.models import (
     PipelineEvent,

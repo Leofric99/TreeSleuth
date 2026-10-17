@@ -93,3 +93,31 @@ class SurnameMappingRequest(BaseModel):
 
 class SurnameMappingResponse(BaseModel):
     mappings: dict[str, str]
+
+
+# GEDCOM Validation Models
+class ValidationIssueModel(BaseModel):
+    """A data quality issue found in GEDCOM data."""
+    severity: Literal["error", "warning", "info"]
+    category: Literal["anachronism", "time_travel", "lifespan", "marriage", "location"]
+    person_id: str
+    person_name: str
+    message: str
+    details: dict[str, object] | None = None
+
+
+class GedcomValidationRequest(BaseModel):
+    """Request to validate GEDCOM files in a directory."""
+    path: Path
+
+
+class GedcomValidationResponse(BaseModel):
+    """Response from GEDCOM validation."""
+    gedcom_files: int
+    total_individuals: int
+    total_families: int
+    issues_found: int
+    errors: int
+    warnings: int
+    issues: list[ValidationIssueModel] = Field(default_factory=list)
+    parse_errors: list[str] = Field(default_factory=list)
