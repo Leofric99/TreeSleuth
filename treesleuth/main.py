@@ -17,13 +17,20 @@ from treesleuth.models import (
     PipelineStartResponse,
     RunSnapshot,
     SystemCheckResponse,
+    SurnameMappingRequest,
+    SurnameMappingResponse,
+    StoryGenerationRequest,
 )
 from treesleuth.paths import PathValidationError
 from treesleuth.pipeline import (
     PipelineCapacityError,
     PipelineCoordinator,
+    PipelineGenerationInProgressError,
+    PipelinePersonNotFoundError,
+    PipelinePreparationNotReadyError,
     PipelineRunNotFoundError,
 )
+from treesleuth.surnames import SurnameMappingError, SurnameMappingValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +103,59 @@ def create_app(coordinator: PipelineCoordinator | None = None) -> FastAPI:
             logger.warning("API run lookup failed for run %s: %s", run_id, exc, exc_info=True)
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return run.snapshot()
+
+    @app.post("/api/runs/{run_id}/generate", response_model=PipelineStartResponse, status_code=202)
+    async def generate_stories(
+        run_id: str,
+        request: StoryGenerationRequest,
+    ) -> PipelineStartResponse:
+        if request.person_id is not None and request.person_ids is not None:
+            raise HTTPException(
+                status_code=422,
+                detail="Specify either person_id or person_ids, not both",
+            )
+        try:
+            run = await pipeline.generate(run_id, request.person_id, request.person_ids)
+        except PipelineRunNotFoundError as exc:
+            logger.warning("API story generation referenced unknown run %s: %s", run_id, exc, exc_info=True)
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PipelinePersonNotFoundError as exc:
+            logger.warning("API story generation referenced unknown person in run %s: %s", run_id, exc, exc_info=True)
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PipelinePreparationNotReadyError as exc:
+            logger.warning("API story generation requested before run %s was ready: %s", run_id, exc)
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except PipelineGenerationInProgressError as exc:
+            logger.warning("API duplicate story generation requested for run %s: %s", run_id, exc)
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except PipelineCapacityError as exc:
+            logger.warning("API story generation reached capacity for run %s: %s", run_id, exc, exc_info=True)
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        return PipelineStartResponse(
+            run_id=run.run_id,
+            events_url=f"/api/runs/{run.run_id}/events",
+        )
+
+    @app.put(
+        "/api/runs/{run_id}/surname-mappings",
+        response_model=SurnameMappingResponse,
+    )
+    async def update_surname_mappings(
+        run_id: str,
+        request: SurnameMappingRequest,
+    ) -> SurnameMappingResponse:
+        try:
+            mappings = await pipeline.update_surname_mappings(run_id, request.mappings)
+        except PipelineRunNotFoundError as exc:
+            logger.warning("API surname mapping referenced unknown run %s: %s", run_id, exc, exc_info=True)
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except SurnameMappingValidationError as exc:
+            logger.warning("API surname mapping validation failed for run %s: %s", run_id, exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except SurnameMappingError as exc:
+            logger.exception("API could not persist surname mappings for run %s", run_id)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return SurnameMappingResponse(mappings=mappings)
 
     @app.get("/api/runs/{run_id}/events")
     async def stream_run_events(

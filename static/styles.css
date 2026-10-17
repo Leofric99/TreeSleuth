@@ -151,3 +151,12 @@ body {
     padding: 1rem;
   }
 }
+.surname-summary::after {
+  content: "v";
+  float: right;
+  color: #5eead4;
+}
+
+details:not([open]) > .surname-summary::after {
+  content: ">";
+}

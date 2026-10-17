@@ -79,9 +79,19 @@ API operations, response shapes, and server-sent event names are documented in
 
 Open `http://127.0.0.1:8000` after starting the service. Check Ollama, enter a
 research-folder path, preview the directory workload, choose an installed
-model, and start analysis. The dashboard shows per-person status changes and
-the live event stream; completed and failed people can be opened to review
-biographies, source citations, conflicts, and errors.
+model, and start analysis. TreeSleuth loads GEDCOM people first, then extracts
+and correlates documents without generating life stories. People are grouped
+and sorted by surname; use the surname mapping controls to display spelling
+variants under one surname. These mappings are saved under `.cache` for that
+research folder and do not change GEDCOM names or identities.
+
+People appear in expandable surname groups. To merge spellings, select the
+spelling to move and the surname to keep, then choose **Merge surnames**.
+After preparation finishes, choose **Generate story** for one individual,
+check one or more people and choose **Generate selected stories**, or choose
+**Generate all stories**. The dashboard shows generation progress and errors
+separately; completed and failed people can be opened to review biographies,
+source citations, conflicts, and errors.
 
 The default server host is `127.0.0.1`, and the app does not enable
 cross-origin access or an endpoint for arbitrary filesystem reads. The
@@ -96,12 +106,16 @@ The directory trawler searches nested folders for `.ged` family trees and
 research documents ending in `.pdf`, `.jpg`, `.jpeg`, `.png`, `.tif`, `.tiff`,
 `.txt`, `.md`, or `.markdown`. PDF and image records use Docling OCR and
 layout-aware text extraction; plain-text and Markdown notes are read directly.
-The application excludes its own `.tree_cache` and `output` folders from later
-scans.
+The application stores extracted text and generated results in the repository's
+gitignored `.cache` directory and excludes `.cache`, legacy `.tree_cache`, and
+`output` folders from later scans. A root-specific cache namespace prevents
+different research folders from sharing extracted text.
 
-Extracted text is cached in `.tree_cache` beneath the selected research
+The selected research folder is read but not modified by TreeSleuth. If it
+contains the repository, the repository's own `.cache` is the only allowed
+application-managed write inside it; source discovery still excludes that
 directory. Cache entries are reused only when the source content and extractor
-identity match. Changed files are extracted again, and cache write/read
+identity match. Changed files are extracted again, and cache read/write
 problems are reported while fresh extraction continues when possible.
 
 An unreadable, empty, corrupt, or unsupported file is reported as an
@@ -129,17 +143,17 @@ tree. Review the source claim, the cited GEDCOM fact, and their source IDs
 before drawing a conclusion. Incomplete evidence and uncertain identity
 matches remain marked uncertain.
 
-Generated biographies are saved under `output` as per-person
-`*_LifeStory.txt` files, alongside JSON conflict reports and structured
-analysis data with claim citations. A stable person-identity suffix prevents
-two people with the same display name from overwriting one another. Model
+Generated biographies are saved under the repository's `.cache` directory as
+per-person `*_LifeStory.txt` files, alongside JSON conflict reports and
+structured analysis data with claim citations. A stable person-identity suffix
+prevents two people with the same display name from overwriting one another. Model
 output is checked for valid structure and known source IDs before it is saved;
 malformed responses or unsupported citations are reported as failures rather
 than treated as verified facts.
 
 ## Diagnostic logs
 
-TreeSleuth writes detailed execution diagnostics to `.treesleuth/logs/treesleuth.log`
+TreeSleuth writes detailed execution diagnostics to `.cache/logs/treesleuth.log`
 in the repository. The log is appended across runs and rotated to bound disk use.
 It can include research paths and other sensitive processing context, so keep
-the checkout private. Generated log files are excluded from Git.
+the checkout private. The `.cache` directory is excluded from Git.

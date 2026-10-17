@@ -3,6 +3,7 @@ import threading
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from treesleuth.app_data import application_data_directory
 
 _LOGGER_NAME = "treesleuth"
 _LOG_FILENAME = "treesleuth.log"
@@ -12,7 +13,7 @@ _CONFIGURATION_LOCK = threading.Lock()
 
 
 def configure_logging(log_directory: Path | None = None) -> Path:
-    directory = log_directory or Path(__file__).resolve().parent.parent / ".treesleuth" / "logs"
+    directory = log_directory or application_data_directory("logs")
     directory.mkdir(parents=True, exist_ok=True)
     log_path = (directory / _LOG_FILENAME).resolve()
 

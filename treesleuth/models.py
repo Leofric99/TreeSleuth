@@ -27,6 +27,11 @@ class PipelineStartRequest(BaseModel):
     model: str = Field(min_length=1)
 
 
+class StoryGenerationRequest(BaseModel):
+    person_id: str | None = None
+    person_ids: list[str] | None = Field(default=None, min_length=1)
+
+
 class PipelineStartResponse(BaseModel):
     run_id: str
     events_url: str
@@ -50,6 +55,9 @@ class PipelineEvent(BaseModel):
 class PersonRunResult(BaseModel):
     id: str
     name: str
+    given_name: str | None = None
+    surname: str | None = None
+    display_surname: str | None = None
     birth_year: int | None = None
     death_year: int | None = None
     document_count: int = Field(ge=0)
@@ -58,6 +66,7 @@ class PersonRunResult(BaseModel):
         "Parsing Records",
         "Comparing with GEDCOM",
         "Writing Biography",
+        "Ready",
         "Finished",
         "Failed",
     ]
@@ -73,3 +82,13 @@ class RunSnapshot(BaseModel):
     people: list[PersonRunResult] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     error: str | None = None
+    parent_run_id: str | None = None
+    surname_mappings: dict[str, str] = Field(default_factory=dict)
+
+
+class SurnameMappingRequest(BaseModel):
+    mappings: dict[str, str]
+
+
+class SurnameMappingResponse(BaseModel):
+    mappings: dict[str, str]

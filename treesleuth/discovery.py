@@ -8,7 +8,7 @@ GEDCOM_SUFFIXES = frozenset({".ged"})
 DOCUMENT_SUFFIXES = frozenset(
     {".pdf", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".txt", ".md", ".markdown"}
 )
-EXCLUDED_DIRECTORY_NAMES = frozenset({".tree_cache", "output"})
+EXCLUDED_DIRECTORY_NAMES = frozenset({".cache", ".tree_cache", "output"})
 
 
 @dataclass(frozen=True)

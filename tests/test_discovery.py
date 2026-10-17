@@ -22,10 +22,12 @@ def test_scan_directory_discovers_nested_mixed_files_case_insensitively(tmp_path
     assert result.files_by_type == {"gedcom": 1, "pdf": 1, "image": 1, "text": 2}
 
 
-def test_scan_directory_excludes_cache_and_output_trees(tmp_path: Path) -> None:
+def test_scan_directory_excludes_application_cache_and_legacy_output_trees(tmp_path: Path) -> None:
+    (tmp_path / ".cache").mkdir()
     (tmp_path / ".tree_cache").mkdir()
     (tmp_path / "output").mkdir()
     (tmp_path / "records").mkdir()
+    (tmp_path / ".cache" / "generated.txt").write_text("application data", encoding="utf-8")
     (tmp_path / ".tree_cache" / "cached.txt").write_text("cached", encoding="utf-8")
     (tmp_path / "output" / "story.txt").write_text("generated", encoding="utf-8")
     (tmp_path / "records" / "source.txt").write_text("source", encoding="utf-8")

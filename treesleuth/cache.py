@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from treesleuth.app_data import application_data_directory, research_root_key
 from treesleuth.paths import ensure_within_root, validate_research_root
 
 logger = logging.getLogger(__name__)
@@ -19,12 +20,20 @@ class CachedText:
 
 
 class ExtractionCache:
-    def __init__(self, root: Path, extractor_identity: str) -> None:
+    def __init__(
+        self,
+        root: Path,
+        extractor_identity: str,
+        *,
+        app_data_root: Path | None = None,
+    ) -> None:
         self.root = validate_research_root(root)
         if not extractor_identity.strip():
             raise ValueError("Extractor identity must be non-empty")
         self.extractor_identity = extractor_identity
-        self.cache_directory = self.root / ".tree_cache"
+        self.cache_directory = (
+            application_data_directory("extraction", app_data_root) / research_root_key(self.root)
+        )
 
     @staticmethod
     def _content_digest(source: Path) -> str:

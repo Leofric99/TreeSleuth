@@ -7,7 +7,7 @@ from treesleuth.cache import ExtractionCache
 def test_cache_reuses_unchanged_document(tmp_path: Path) -> None:
     source = tmp_path / "record.txt"
     source.write_text("source text", encoding="utf-8")
-    cache = ExtractionCache(tmp_path, "plain-text-v1")
+    cache = ExtractionCache(tmp_path, "plain-text-v1", app_data_root=tmp_path / ".cache")
     calls: list[Path] = []
 
     def extract(path: Path) -> str:
@@ -27,7 +27,7 @@ def test_cache_reuses_unchanged_document(tmp_path: Path) -> None:
 def test_cache_reextracts_and_replaces_changed_source(tmp_path: Path) -> None:
     source = tmp_path / "record.txt"
     source.write_text("first version", encoding="utf-8")
-    cache = ExtractionCache(tmp_path, "docling-v1")
+    cache = ExtractionCache(tmp_path, "docling-v1", app_data_root=tmp_path / ".cache")
     results = iter(["first extraction", "updated extraction"])
 
     first = cache.get_or_extract(source, lambda _path: next(results))
@@ -39,15 +39,15 @@ def test_cache_reextracts_and_replaces_changed_source(tmp_path: Path) -> None:
     assert second.text == "updated extraction"
     assert any("stale" in item for item in second.warnings)
     assert third.cache_hit
-    cache_files = list((tmp_path / ".tree_cache").glob("*.json"))
+    cache_files = list(cache.cache_directory.glob("*.json"))
     assert len(cache_files) == 1
 
 
 def test_cache_invalidates_when_extractor_identity_changes(tmp_path: Path) -> None:
     source = tmp_path / "record.txt"
     source.write_text("source text", encoding="utf-8")
-    old_cache = ExtractionCache(tmp_path, "docling-v1")
-    new_cache = ExtractionCache(tmp_path, "docling-v2")
+    old_cache = ExtractionCache(tmp_path, "docling-v1", app_data_root=tmp_path / ".cache")
+    new_cache = ExtractionCache(tmp_path, "docling-v2", app_data_root=tmp_path / ".cache")
     old_cache.get_or_extract(source, lambda _path: "old extraction")
 
     result = new_cache.get_or_extract(source, lambda _path: "new extraction")
@@ -59,7 +59,7 @@ def test_cache_invalidates_when_extractor_identity_changes(tmp_path: Path) -> No
 def test_cache_read_failure_falls_back_to_extraction(tmp_path: Path, monkeypatch) -> None:
     source = tmp_path / "record.txt"
     source.write_text("source text", encoding="utf-8")
-    cache = ExtractionCache(tmp_path, "plain-v1")
+    cache = ExtractionCache(tmp_path, "plain-v1", app_data_root=tmp_path / ".cache")
     cache_path = cache._cache_path(source)
     cache_path.parent.mkdir()
     cache_path.write_text("not json", encoding="utf-8")
@@ -75,7 +75,7 @@ def test_cache_read_failure_falls_back_to_extraction(tmp_path: Path, monkeypatch
 def test_cache_write_failure_returns_extraction_with_warning(tmp_path: Path, monkeypatch) -> None:
     source = tmp_path / "record.txt"
     source.write_text("source text", encoding="utf-8")
-    cache = ExtractionCache(tmp_path, "plain-v1")
+    cache = ExtractionCache(tmp_path, "plain-v1", app_data_root=tmp_path / ".cache")
     original_mkdir = Path.mkdir
 
     def fail_cache_directory(path: Path, *args, **kwargs) -> None:
@@ -90,3 +90,25 @@ def test_cache_write_failure_returns_extraction_with_warning(tmp_path: Path, mon
     assert result.text == "fresh text"
     assert not result.cache_hit
     assert any("Could not write cache" in warning for warning in result.warnings)
+
+
+def test_cache_isolated_by_canonical_research_root(tmp_path: Path) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_root.mkdir()
+    second_root.mkdir()
+    (first_root / "record.txt").write_text("first", encoding="utf-8")
+    (second_root / "record.txt").write_text("second", encoding="utf-8")
+    app_data_root = tmp_path / ".cache"
+    first_cache = ExtractionCache(first_root, "plain-v1", app_data_root=app_data_root)
+    second_cache = ExtractionCache(second_root, "plain-v1", app_data_root=app_data_root)
+
+    first = first_cache.get_or_extract(first_root / "record.txt", lambda _path: "first extraction")
+    second = second_cache.get_or_extract(second_root / "record.txt", lambda _path: "second extraction")
+
+    assert first_cache.cache_directory != second_cache.cache_directory
+    assert first.text == "first extraction"
+    assert second.text == "second extraction"
+    assert first_cache.cache_directory.is_relative_to(app_data_root)
+    assert not (first_root / ".tree_cache").exists()
+    assert not (second_root / ".tree_cache").exists()

@@ -3,6 +3,7 @@ import logging
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import AsyncIterator, Callable
 from uuid import uuid4
@@ -34,6 +35,12 @@ from treesleuth.models import (
 )
 from treesleuth.paths import validate_research_root
 from treesleuth.results import OutputWriteError, SavedAnalysis, save_analysis_results
+from treesleuth.surnames import (
+    SurnameMappingError,
+    display_surname,
+    load_surname_mappings,
+    save_surname_mappings,
+)
 
 logger = logging.getLogger(__name__)
 _EXTRACTION_PROGRESS_INTERVAL_SECONDS = 15
@@ -45,6 +52,32 @@ class PipelineCapacityError(RuntimeError):
 
 class PipelineRunNotFoundError(LookupError):
     """Raised when a requested pipeline run is unknown."""
+
+
+class PipelinePreparationNotReadyError(RuntimeError):
+    """Raised when story generation is requested before preparation completes."""
+
+
+class PipelinePersonNotFoundError(LookupError):
+    """Raised when a requested person is not part of a prepared run."""
+
+
+class PipelineGenerationInProgressError(RuntimeError):
+    """Raised when one or more requested people are already being generated."""
+
+
+@dataclass(frozen=True)
+class PreparedPerson:
+    id: str
+    name: str
+    birth_year: int | None
+    death_year: int | None
+    person: IndividualRecord | None
+    documents: tuple[ResearchDocument, ...]
+    cluster: ProvisionalCluster | None
+    given_name: str | None = None
+    surname: str | None = None
+    display_surname: str | None = None
 
 
 @dataclass
@@ -59,6 +92,10 @@ class RunRecord:
     condition: asyncio.Condition = field(default_factory=asyncio.Condition)
     task: asyncio.Task[None] | None = None
     people: dict[str, PersonRunResult] = field(default_factory=dict)
+    prepared_people: dict[str, PreparedPerson] = field(default_factory=dict)
+    prepared: bool = False
+    parent_run_id: str | None = None
+    surname_mappings: dict[str, str] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     error: str | None = None
 
@@ -100,6 +137,8 @@ class RunRecord:
             people=list(self.people.values()),
             warnings=list(self.warnings),
             error=self.error,
+            parent_run_id=self.parent_run_id,
+            surname_mappings=self.surname_mappings,
         )
 
 
@@ -111,15 +150,24 @@ class PipelineCoordinator:
         analyzer: OllamaAnalyzer | None = None,
         scanner: Callable[[str | Path], DirectoryScan] = scan_directory,
         gedcom_parser: Callable[[list[Path]], GedcomIndex] = parse_gedcom_files,
-        cache_factory: Callable[[Path, str], ExtractionCache] = ExtractionCache,
+        cache_factory: Callable[[Path, str], ExtractionCache] | None = None,
+        app_data_root: Path | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.extractor = extractor or DoclingExtractor()
         self.analyzer = analyzer or OllamaAnalyzer(self.settings)
         self.scanner = scanner
         self.gedcom_parser = gedcom_parser
-        self.cache_factory = cache_factory
+        self.cache_factory = cache_factory or (
+            lambda root, identity: ExtractionCache(
+                root,
+                identity,
+                app_data_root=app_data_root,
+            )
+        )
+        self.app_data_root = app_data_root
         self._runs: dict[str, RunRecord] = {}
+        self._generating_people: dict[str, set[str]] = {}
         self._lock = asyncio.Lock()
         self._executor = ThreadPoolExecutor(max_workers=self.settings.max_workers)
 
@@ -141,6 +189,91 @@ class PipelineCoordinator:
             self._runs[run.run_id] = run
             run.task = asyncio.create_task(self._execute(run))
             return run
+
+    async def generate(
+        self,
+        run_id: str,
+        person_id: str | None = None,
+        person_ids: list[str] | None = None,
+    ) -> RunRecord:
+        prepared_run = self.get_run(run_id)
+        if not prepared_run.prepared or prepared_run.status != "completed":
+            raise PipelinePreparationNotReadyError(
+                "Document preparation must complete before generating stories"
+            )
+        if person_id is not None and person_ids is not None:
+            raise ValueError("Specify either person_id or person_ids, not both")
+        if person_ids is not None:
+            selected_ids = list(dict.fromkeys(person_ids))
+            if not selected_ids:
+                raise PipelinePreparationNotReadyError("Select at least one person for story generation")
+            unknown_ids = [item for item in selected_ids if item not in prepared_run.prepared_people]
+            if unknown_ids:
+                raise PipelinePersonNotFoundError(
+                    f"Person not found in prepared run: {', '.join(unknown_ids)}"
+                )
+        elif person_id is None:
+            selected_ids = list(prepared_run.prepared_people)
+        else:
+            if person_id not in prepared_run.prepared_people:
+                raise PipelinePersonNotFoundError(f"Person not found in prepared run: {person_id}")
+            selected_ids = [person_id]
+        if not selected_ids:
+            raise PipelinePreparationNotReadyError("No people are available for story generation")
+
+        async with self._lock:
+            active = sum(run.status in {"queued", "running"} for run in self._runs.values())
+            if active >= self.settings.max_active_runs:
+                raise PipelineCapacityError("The maximum number of active analysis runs has been reached")
+            generating = self._generating_people.setdefault(run_id, set())
+            duplicate_ids = generating.intersection(selected_ids)
+            if duplicate_ids:
+                names = [prepared_run.prepared_people[item].name for item in sorted(duplicate_ids)]
+                raise PipelineGenerationInProgressError(
+                    f"Story generation is already in progress for: {', '.join(names)}"
+                )
+            generating.update(selected_ids)
+            run = RunRecord(
+                run_id=str(uuid4()),
+                root=prepared_run.root,
+                model=prepared_run.model,
+                event_limit=self.settings.max_run_events,
+                status="running",
+                parent_run_id=run_id,
+                surname_mappings=dict(prepared_run.surname_mappings),
+            )
+            for requested_id in selected_ids:
+                current = prepared_run.people[requested_id]
+                run.people[requested_id] = current.model_copy(
+                    update={"status": "Ready", "error": None}
+                )
+            self._runs[run.run_id] = run
+            run.task = asyncio.create_task(
+                self._execute_generation(run, prepared_run, selected_ids)
+            )
+            return run
+
+    async def update_surname_mappings(
+        self,
+        run_id: str,
+        mappings: dict[str, str],
+    ) -> dict[str, str]:
+        run = self.get_run(run_id)
+        saved_mappings = await self._run_blocking(
+            save_surname_mappings,
+            run.root,
+            mappings,
+            self.app_data_root,
+        )
+        if not isinstance(saved_mappings, dict):
+            raise TypeError("Surname mapping writer returned an invalid result")
+        run.surname_mappings = saved_mappings
+        for person in run.people.values():
+            if person.surname is None:
+                continue
+            person.display_surname = display_surname(person.surname, saved_mappings)
+            await self._publish_person(run, person)
+        return saved_mappings
 
     def get_run(self, run_id: str) -> RunRecord:
         try:
@@ -205,11 +338,7 @@ class PipelineCoordinator:
             run.model,
         )
         try:
-            await run.publish("stage", "Scanning", "Checking local model and scanning the selected directory")
-            available = await self.analyzer.available_models()
-            if run.model not in available:
-                raise OllamaServiceError(f"Selected model is not installed locally: {run.model}")
-
+            await run.publish("stage", "Scanning", "Scanning the selected directory")
             scan = await self._run_blocking(self.scanner, run.root)
             if not isinstance(scan, DirectoryScan):
                 raise TypeError("Directory scanner returned an invalid result")
@@ -226,6 +355,19 @@ class PipelineCoordinator:
             for error in scan.errors:
                 await self._warning(run, error)
 
+            try:
+                mappings = await self._run_blocking(
+                    load_surname_mappings,
+                    run.root,
+                    self.app_data_root,
+                )
+            except SurnameMappingError as exc:
+                await self._warning(run, str(exc), exc_info=True)
+            else:
+                if not isinstance(mappings, dict):
+                    raise TypeError("Surname mapping reader returned an invalid result")
+                run.surname_mappings = mappings
+
             index = await self._run_blocking(
                 self.gedcom_parser,
                 [item.path for item in scan.gedcom_files],
@@ -241,18 +383,33 @@ class PipelineCoordinator:
                     f"GEDCOM baseline loaded: {len(index.individuals)} individuals found",
                     payload={"individual_count": len(index.individuals)},
                 )
+                for person in index.individuals.values():
+                    progress = PersonRunResult(
+                        id=person.id,
+                        name=person.name,
+                        given_name=person.given_name,
+                        surname=person.surname,
+                        display_surname=display_surname(person.surname, run.surname_mappings),
+                        birth_year=person.birth_year,
+                        death_year=person.death_year,
+                        document_count=0,
+                        status="Parsing Records",
+                    )
+                    run.people[person.id] = progress
+                    await self._publish_person(run, progress)
             else:
                 await self._warning(run, "No parseable GEDCOM baseline was found; person groups are provisional.")
 
             documents = await self._extract_documents(run, scan)
             if index.individuals:
-                await self._analyze_indexed_people(run, index, documents)
+                run.prepared_people = await self._prepare_indexed_people(run, index, documents)
             else:
-                await self._analyze_provisional_people(run, documents)
+                run.prepared_people = await self._prepare_provisional_people(run, documents)
+            run.prepared = True
             await run.publish(
                 "complete",
-                "Finished",
-                "Analysis pipeline completed",
+                "Ready",
+                "Document preparation completed; stories are ready to generate",
                 payload={"snapshot": run.snapshot().model_dump(mode="json")},
             )
         except asyncio.CancelledError:
@@ -332,12 +489,12 @@ class PipelineCoordinator:
                 )
         return documents
 
-    async def _analyze_indexed_people(
+    async def _prepare_indexed_people(
         self,
         run: RunRecord,
         index: GedcomIndex,
         documents: list[ResearchDocument],
-    ) -> None:
+    ) -> dict[str, PreparedPerson]:
         associations = correlate_documents(documents, list(index.individuals.values()))
         documents_by_person: dict[str, list[ResearchDocument]] = {}
         docs_by_id = {document.id: document for document in documents}
@@ -363,37 +520,132 @@ class PipelineCoordinator:
             else:
                 await self._warning(run, f"No GEDCOM individual matched {association.document_id}")
 
+        prepared_people: dict[str, PreparedPerson] = {}
         for person in index.individuals.values():
-            await self._analyze_person(
-                run,
-                person.id,
-                person.name,
-                person.birth_year,
-                person.death_year,
-                person,
-                documents_by_person.get(person.id, []),
-                None,
+            person_documents = tuple(documents_by_person.get(person.id, []))
+            prepared_people[person.id] = PreparedPerson(
+                id=person.id,
+                name=person.name,
+                given_name=person.given_name,
+                surname=person.surname,
+                display_surname=display_surname(person.surname, run.surname_mappings),
+                birth_year=person.birth_year,
+                death_year=person.death_year,
+                person=person,
+                documents=person_documents,
+                cluster=None,
             )
+            progress = run.people[person.id]
+            progress.document_count = len(person_documents)
+            progress.status = "Ready"
+            await self._publish_person(run, progress)
+        return prepared_people
 
-    async def _analyze_provisional_people(
+    async def _prepare_provisional_people(
         self,
         run: RunRecord,
         documents: list[ResearchDocument],
-    ) -> None:
+    ) -> dict[str, PreparedPerson]:
         clusters = cluster_without_gedcom(documents)
         docs_by_id = {document.id: document for document in documents}
+        prepared_people: dict[str, PreparedPerson] = {}
         for cluster in clusters:
             cluster_documents = [docs_by_id[document_id] for document_id in cluster.document_ids]
-            await self._analyze_person(
-                run,
-                cluster.id,
-                cluster.name,
-                min(cluster.years) if cluster.years else None,
-                max(cluster.years) if cluster.years else None,
-                None,
-                cluster_documents,
-                cluster,
+            person = PreparedPerson(
+                id=cluster.id,
+                name=cluster.name,
+                birth_year=min(cluster.years) if cluster.years else None,
+                death_year=max(cluster.years) if cluster.years else None,
+                person=None,
+                documents=tuple(cluster_documents),
+                cluster=cluster,
             )
+            prepared_people[cluster.id] = person
+            progress = PersonRunResult(
+                id=person.id,
+                name=person.name,
+                birth_year=person.birth_year,
+                death_year=person.death_year,
+                document_count=len(person.documents),
+                status="Ready",
+            )
+            run.people[person.id] = progress
+            await self._publish_person(run, progress)
+        return prepared_people
+
+    async def _execute_generation(
+        self,
+        run: RunRecord,
+        prepared_run: RunRecord,
+        person_ids: list[str],
+    ) -> None:
+        logger.info(
+            "Starting story generation run %s from prepared run %s for %s people",
+            run.run_id,
+            prepared_run.run_id,
+            len(person_ids),
+        )
+        try:
+            await run.publish("stage", "Generating Stories", "Checking local model availability")
+            available = await self.analyzer.available_models()
+            if run.model not in available:
+                raise OllamaServiceError(f"Selected model is not installed locally: {run.model}")
+            for person_id in person_ids:
+                person = prepared_run.prepared_people[person_id]
+                await self._analyze_person(
+                    run,
+                    person.id,
+                    person.name,
+                    person.birth_year,
+                    person.death_year,
+                    person.person,
+                    list(person.documents),
+                    person.cluster,
+                )
+                prepared_run.people[person_id] = run.people[person_id].model_copy(deep=True)
+            await run.publish(
+                "complete",
+                "Finished",
+                "Requested story generation completed",
+                payload={"snapshot": run.snapshot().model_dump(mode="json")},
+            )
+        except asyncio.CancelledError:
+            run.error = "Story generation was cancelled before completion"
+            logger.warning("Story generation run %s was cancelled", run.run_id, exc_info=True)
+            await self._fail_unfinished_people(run, prepared_run, person_ids, run.error)
+            await run.publish("error", "Failed", run.error)
+            raise
+        except Exception as exc:
+            logger.exception(
+                "Story generation run %s failed for prepared run %s",
+                run.run_id,
+                prepared_run.run_id,
+            )
+            run.error = str(exc)
+            await self._fail_unfinished_people(run, prepared_run, person_ids, run.error)
+            await run.publish("error", "Failed", f"Story generation failed: {exc}")
+        finally:
+            async with self._lock:
+                generating = self._generating_people.get(prepared_run.run_id)
+                if generating is not None:
+                    generating.difference_update(person_ids)
+                    if not generating:
+                        self._generating_people.pop(prepared_run.run_id, None)
+
+    async def _fail_unfinished_people(
+        self,
+        run: RunRecord,
+        prepared_run: RunRecord,
+        person_ids: list[str],
+        error: str,
+    ) -> None:
+        for person_id in person_ids:
+            progress = run.people[person_id]
+            if progress.status == "Ready":
+                progress.status = "Failed"
+                progress.error = error
+                prepared_run.people[person_id] = progress.model_copy(deep=True)
+                await self._publish_person(run, progress)
 
     async def _analyze_person(
         self,
@@ -409,6 +661,13 @@ class PipelineCoordinator:
         progress = PersonRunResult(
             id=person_id,
             name=name,
+            given_name=person.given_name if person is not None else None,
+            surname=person.surname if person is not None else None,
+            display_surname=(
+                display_surname(person.surname, run.surname_mappings)
+                if person is not None
+                else None
+            ),
             birth_year=birth_year,
             death_year=death_year,
             document_count=len(documents),
@@ -442,8 +701,13 @@ class PipelineCoordinator:
                 documents,
                 cluster=cluster,
             )
+            save_results = (
+                partial(save_analysis_results, app_data_root=self.app_data_root)
+                if self.app_data_root is not None
+                else save_analysis_results
+            )
             saved = await self._run_blocking(
-                save_analysis_results,
+                save_results,
                 run.root,
                 person_id,
                 name,

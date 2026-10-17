@@ -68,6 +68,7 @@ When the user wants to propose a new change:
 
 ## Best Practices
 
+- Return code, and statements, only. Skip pleasantries and introductions.
 - Always use `--json` flag when you need to parse output programmatically
 - Run `openspec validate` after creating or modifying artifacts
 - Check `openspec status` before starting work to understand the current state

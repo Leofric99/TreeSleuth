@@ -91,10 +91,12 @@ def test_full_local_pipeline_reuses_cache_and_saves_auditable_results(
     source = research_root / "scans" / "census" / "entry.txt"
     source.write_text("Ada Lovelace is listed in the census in 1860.", encoding="utf-8")
     extractor = CountingExtractor()
+    app_data_root = tmp_path / ".cache"
     coordinator = PipelineCoordinator(
         settings=Settings(max_workers=1, max_active_runs=1),
         extractor=extractor,
         analyzer=FixtureAnalyzer(),
+        app_data_root=app_data_root,
     )
 
     with TestClient(create_app(coordinator)) as client:
@@ -107,26 +109,39 @@ def test_full_local_pipeline_reuses_cache_and_saves_auditable_results(
             run_id = start.json()["run_id"]
             with client.stream("GET", start.json()["events_url"]) as stream:
                 event_stream = "".join(stream.iter_text())
-            snapshot = client.get(f"/api/runs/{run_id}").json()
+            prepared = client.get(f"/api/runs/{run_id}").json()
 
-            assert snapshot["status"] == "completed"
-            assert len(snapshot["people"]) == 1
-            person = snapshot["people"][0]
-            assert person["name"] == "Ada Lovelace"
-            assert person["status"] == "Finished"
-            assert person["document_count"] == 1
-            assert person["conflicts"][0]["source_document_id"] == str(Path("scans") / "census" / "entry.txt")
+            assert prepared["status"] == "completed"
+            assert len(prepared["people"]) == 1
+            assert prepared["people"][0]["name"] == "Ada Lovelace"
+            assert prepared["people"][0]["status"] == "Ready"
+            assert prepared["people"][0]["document_count"] == 1
             assert "event: person" in event_stream
             assert "event: complete" in event_stream
             assert f'"cache_hit":{str(expected_cache_hit).lower()}' in event_stream
 
+            generation = client.post(
+                f"/api/runs/{run_id}/generate",
+                json={"person_id": prepared["people"][0]["id"]},
+            )
+            assert generation.status_code == 202
+            with client.stream("GET", generation.json()["events_url"]) as stream:
+                generation_events = "".join(stream.iter_text())
+            snapshot = client.get(f"/api/runs/{generation.json()['run_id']}").json()
+            person = snapshot["people"][0]
+            assert person["status"] == "Finished"
+            assert person["conflicts"][0]["source_document_id"] == str(Path("scans") / "census" / "entry.txt")
+            assert "event: complete" in generation_events
+
             biography_path = Path(person["biography_path"])
             assert biography_path.is_file()
             assert "Ada Lovelace was born" in biography_path.read_text(encoding="utf-8")
-            conflict_files = list((research_root / "output").glob("*_Conflicts.json"))
+            assert biography_path.is_relative_to(app_data_root)
+            conflict_files = list((app_data_root / "results").rglob("*_Conflicts.json"))
             conflict_data = json.loads(conflict_files[0].read_text(encoding="utf-8"))
             assert conflict_data["findings"][0]["source_claim"] == "The census lists Ada in 1860."
             assert "1852" in conflict_data["findings"][0]["baseline_claim"]
+            assert not (research_root / "output").exists()
 
     assert extractor.calls == [source]
     assert "Ada Lovelace is listed in the census in 1860." in log_path.read_text(encoding="utf-8")

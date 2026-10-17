@@ -7,6 +7,7 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
+from treesleuth.app_data import application_data_directory, research_root_key
 from treesleuth.analysis import AuditResponse, BiographyResponse
 from treesleuth.paths import ensure_within_root, validate_research_root
 
@@ -69,18 +70,20 @@ def save_analysis_results(
     person_name: str,
     biography: BiographyResponse,
     conflicts: AuditResponse,
+    *,
+    app_data_root: Path | None = None,
 ) -> SavedAnalysis:
     selected_root = validate_research_root(root)
-    output_directory = selected_root / "output"
-    ensure_within_root(selected_root, output_directory)
+    cache_root = application_data_directory("results", app_data_root)
+    output_directory = cache_root / research_root_key(selected_root)
     output_directory.mkdir(parents=True, exist_ok=True)
-    ensure_within_root(selected_root, output_directory)
+    ensure_within_root(cache_root, output_directory)
 
     identifier_hash = hashlib.sha256(person_id.encode("utf-8")).hexdigest()[:12]
     basename = f"{_safe_slug(person_name)}_{identifier_hash}"
-    biography_path = ensure_within_root(selected_root, output_directory / f"{basename}_LifeStory.txt")
-    conflicts_path = ensure_within_root(selected_root, output_directory / f"{basename}_Conflicts.json")
-    analysis_path = ensure_within_root(selected_root, output_directory / f"{basename}_Analysis.json")
+    biography_path = ensure_within_root(cache_root, output_directory / f"{basename}_LifeStory.txt")
+    conflicts_path = ensure_within_root(cache_root, output_directory / f"{basename}_Conflicts.json")
+    analysis_path = ensure_within_root(cache_root, output_directory / f"{basename}_Analysis.json")
     analysis_document = {
         "person": {"id": person_id, "name": person_name},
         "biography": biography.model_dump(mode="json"),

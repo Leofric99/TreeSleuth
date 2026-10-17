@@ -52,29 +52,40 @@
 
       <div class="grid gap-6 xl:grid-cols-[minmax(0,1.4fr)_minmax(20rem,0.8fr)]">
         <section class="panel min-w-0">
-          <div class="mb-4 flex items-center justify-between gap-3">
+          <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 class="text-lg font-semibold">People &amp; processing</h2>
-              <p class="mt-1 text-sm text-slate-400">GEDCOM individuals or explicitly provisional clusters</p>
+              <p class="mt-1 text-sm text-slate-400">Expand a surname group to review people and choose whose stories to generate</p>
             </div>
-            <span id="runStatus" class="status-pill status-neutral">Idle</span>
+            <div class="flex items-center gap-3">
+              <span id="runStatus" class="status-pill status-neutral">Idle</span>
+            </div>
           </div>
-          <div class="overflow-x-auto">
-            <table class="w-full min-w-[38rem] text-left text-sm">
-              <thead class="border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th class="py-3 pr-4 font-medium">Name</th>
-                  <th class="py-3 pr-4 font-medium">Lifespan</th>
-                  <th class="py-3 pr-4 font-medium">Documents</th>
-                  <th class="py-3 pr-4 font-medium">Status</th>
-                  <th class="py-3 font-medium">Results</th>
-                </tr>
-              </thead>
-              <tbody id="peopleRows">
-                <tr><td colspan="5" class="py-8 text-center text-slate-500">Preview a folder to begin.</td></tr>
-              </tbody>
-            </table>
+          <form id="surnameMappingForm" class="mb-4 grid gap-3 rounded-lg border border-slate-800 bg-slate-950/50 p-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+            <label class="grid gap-2 text-sm font-medium text-slate-300" for="surnameVariant">
+              Merge this spelling
+              <select id="surnameVariant" class="field" disabled>
+                <option value="">Load people to manage surnames</option>
+              </select>
+            </label>
+            <label class="grid gap-2 text-sm font-medium text-slate-300" for="displaySurname">
+              Into this surname
+              <select id="displaySurname" class="field" disabled>
+                <option value="">Choose the surname to keep</option>
+              </select>
+            </label>
+            <button id="saveSurnameMapping" class="button button-secondary self-end" type="submit" disabled>Merge surnames</button>
+            <p id="surnameMappingMessage" class="text-sm text-slate-400 sm:col-span-3" role="status"></p>
+          </form>
+          <div class="mb-4 flex flex-wrap items-center gap-3">
+            <label class="flex items-center gap-2 text-sm text-slate-300">
+              <input id="selectAllPeople" class="h-4 w-4 accent-teal-400" type="checkbox" disabled>
+              Select all people
+            </label>
+            <button id="generateSelected" class="button button-secondary" type="button" disabled>Generate selected stories</button>
+            <button id="generateAll" class="button button-primary" type="button" disabled>Generate all stories</button>
           </div>
+          <div id="peopleGroups" class="space-y-3" aria-live="polite"></div>
         </section>
 
         <section class="panel min-w-0">
