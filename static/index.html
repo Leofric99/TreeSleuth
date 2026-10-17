@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#101b1a">
-    <title>TreeSleuth — Local Genealogy Research</title>
+    <title>TreeSleuth — GEDCOM Validator</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="/styles.css">
   </head>
@@ -12,123 +12,93 @@
     <header class="border-b border-slate-800 bg-slate-950/90">
       <div class="mx-auto flex max-w-7xl items-center justify-between px-5 py-5">
         <div>
-          <p class="text-xs font-semibold uppercase tracking-[0.24em] text-teal-300">Private by design</p>
+          <p class="text-xs font-semibold uppercase tracking-[0.24em] text-teal-300">Local GEDCOM auditor</p>
           <h1 class="mt-1 text-2xl font-semibold tracking-tight">TreeSleuth</h1>
         </div>
-        <span id="serviceStatus" class="status-pill status-neutral" role="status">Checking local model…</span>
       </div>
     </header>
 
-    <main class="mx-auto grid max-w-7xl gap-6 px-5 py-7">
-      <section class="panel">
-        <div class="mb-5 flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 class="text-lg font-semibold">Research folder</h2>
-            <p class="mt-1 text-sm text-slate-400">Choose a local folder. Files stay on this machine.</p>
+    <main class="mx-auto max-w-4xl gap-6 px-5 py-7">
+      <section class="rounded-lg border border-slate-800 bg-slate-900/50 p-6">
+        <div class="mb-6">
+          <h2 class="text-lg font-semibold">Validate GEDCOM File</h2>
+          <p class="mt-2 text-sm text-slate-400">Upload a family tree file to check for logical errors, timeline mistakes, and data inconsistencies.</p>
+        </div>
+
+        <div class="space-y-4">
+          <!-- File upload -->
+          <div class="rounded-lg border-2 border-dashed border-slate-700 bg-slate-950/30 p-8 text-center">
+            <input 
+              id="gedcomFile" 
+              class="hidden" 
+              type="file" 
+              accept=".ged"
+              aria-label="Choose GEDCOM file"
+            >
+            <label for="gedcomFile" class="cursor-pointer">
+              <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+              </svg>
+              <p class="mt-2 font-medium text-slate-200">Click to upload or drag and drop</p>
+              <p class="mt-1 text-sm text-slate-500">.ged files only</p>
+            </label>
           </div>
-          <button id="refreshModels" class="button button-secondary" type="button">Check Ollama</button>
+
+          <!-- Selected file display -->
+          <div id="fileInfo" class="hidden rounded-lg border border-slate-700 bg-slate-950/50 p-4">
+            <p class="text-sm font-medium text-slate-300">
+              Selected: <span id="fileName" class="font-mono text-teal-300"></span>
+            </p>
+            <div class="mt-3 flex gap-3">
+              <button id="validateBtn" class="rounded-lg bg-teal-600 px-4 py-2 font-medium hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                Validate
+              </button>
+              <button id="clearBtn" class="rounded-lg border border-slate-700 px-4 py-2 font-medium hover:bg-slate-800">
+                Clear
+              </button>
+            </div>
+            <p id="validationStatus" class="mt-3 text-sm text-slate-400" role="status"></p>
+          </div>
+
+          <!-- Error display -->
+          <p id="errorMessage" class="hidden rounded-lg border border-rose-900 bg-rose-950/60 px-4 py-3 text-sm text-rose-200" role="alert"></p>
         </div>
-        <div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_16rem_16rem]">
-          <label class="grid gap-2 text-sm font-medium text-slate-300" for="directoryPath">
-            Folder path
-            <input id="directoryPath" class="field" type="text" autocomplete="off"
-              placeholder="Enter an absolute path to your research folder">
-          </label>
-          <label class="grid gap-2 text-sm font-medium text-slate-300" for="modelSelect">
-            Local Ollama model
-            <select id="modelSelect" class="field" disabled>
-              <option value="">Check Ollama to load models</option>
-            </select>
-          </label>
-          <label class="grid gap-2 text-sm font-medium text-slate-300" for="visionModelSelect">
-            Vision model (transcription)
-            <select id="visionModelSelect" class="field" disabled>
-              <option value="">Check Ollama to load models</option>
-            </select>
-          </label>
-        </div>
-        <div class="mt-4 flex flex-wrap gap-3">
-          <button id="previewDirectory" class="button button-secondary" type="button">Preview folder</button>
-          <button id="startPipeline" class="button button-primary" type="button" disabled>Start analysis</button>
-          <p id="actionMessage" class="self-center text-sm text-slate-400" role="status"></p>
-        </div>
-        <div id="previewSummary" class="mt-5 hidden grid-cols-2 gap-3 sm:grid-cols-4" aria-live="polite"></div>
-        <p id="errorMessage" class="mt-4 hidden rounded-lg border border-rose-900 bg-rose-950/60 px-4 py-3 text-sm text-rose-200" role="alert"></p>
       </section>
 
-      <div class="grid gap-6 xl:grid-cols-[minmax(0,1.4fr)_minmax(20rem,0.8fr)]">
-        <section class="panel min-w-0">
-          <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 class="text-lg font-semibold">People &amp; processing</h2>
-              <p class="mt-1 text-sm text-slate-400">Expand a surname group to review people and choose whose stories to generate</p>
-            </div>
-            <div class="flex items-center gap-3">
-              <span id="runStatus" class="status-pill status-neutral">Idle</span>
-            </div>
-          </div>
-          <form id="surnameMappingForm" class="mb-4 grid gap-3 rounded-lg border border-slate-800 bg-slate-950/50 p-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-            <label class="grid gap-2 text-sm font-medium text-slate-300" for="surnameVariant">
-              Merge this spelling
-              <select id="surnameVariant" class="field" disabled>
-                <option value="">Load people to manage surnames</option>
-              </select>
-            </label>
-            <label class="grid gap-2 text-sm font-medium text-slate-300" for="displaySurname">
-              Into this surname
-              <select id="displaySurname" class="field" disabled>
-                <option value="">Choose the surname to keep</option>
-              </select>
-            </label>
-            <button id="saveSurnameMapping" class="button button-secondary self-end" type="submit" disabled>Merge surnames</button>
-            <p id="surnameMappingMessage" class="text-sm text-slate-400 sm:col-span-3" role="status"></p>
-          </form>
-          <div class="mb-4 flex flex-wrap items-center gap-3">
-            <label class="flex items-center gap-2 text-sm text-slate-300">
-              <input id="selectAllPeople" class="h-4 w-4 accent-teal-400" type="checkbox" disabled>
-              Select all people
-            </label>
-            <button id="generateSelected" class="button button-secondary" type="button" disabled>Generate selected stories</button>
-            <button id="generateAll" class="button button-primary" type="button" disabled>Generate all stories</button>
-          </div>
-          <div id="peopleGroups" class="space-y-3" aria-live="polite"></div>
-        </section>
-
-        <section class="panel min-w-0">
-          <div class="mb-4 flex items-center justify-between gap-3">
-            <div>
-              <h2 class="text-lg font-semibold">Live event feed</h2>
-              <p class="mt-1 text-sm text-slate-400">Pipeline activity from this machine</p>
-            </div>
-            <button id="clearLog" class="button button-quiet" type="button">Clear</button>
-          </div>
-          <ol id="eventFeed" class="event-feed" aria-live="polite" aria-relevant="additions"></ol>
-        </section>
-      </div>
-
-      <section id="resultPanel" class="panel hidden" aria-labelledby="resultTitle">
-        <div class="mb-4 flex items-center justify-between gap-4">
-          <div>
-            <p class="text-xs font-semibold uppercase tracking-[0.18em] text-teal-300">Person result</p>
-            <h2 id="resultTitle" class="mt-1 text-lg font-semibold">Select a person</h2>
-          </div>
-          <button id="closeResult" class="button button-quiet" type="button">Close</button>
+      <!-- Results section -->
+      <section id="resultsSection" class="hidden rounded-lg border border-slate-800 bg-slate-900/50 p-6">
+        <div class="mb-6">
+          <h2 class="text-lg font-semibold">Validation Results</h2>
+          <p id="resultsSummary" class="mt-2 text-sm text-slate-400"></p>
         </div>
-        <div class="grid gap-4 lg:grid-cols-2">
-          <article class="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
-            <h3 class="font-medium text-slate-200">Life story</h3>
-            <pre id="biographyText" class="result-copy mt-3">No completed biography selected.</pre>
-          </article>
-          <article class="rounded-xl border border-amber-900/70 bg-amber-950/20 p-4">
-            <h3 class="font-medium text-amber-200">Potential contradictions</h3>
-            <ul id="conflictList" class="mt-3 space-y-3 text-sm"></ul>
-          </article>
+
+        <!-- Summary cards -->
+        <div class="grid gap-4 sm:grid-cols-4 mb-6">
+          <div class="rounded-lg border border-slate-700 bg-slate-950/50 p-4">
+            <p class="text-xs font-semibold text-slate-400 uppercase">Individuals</p>
+            <p id="individualCount" class="mt-1 text-2xl font-bold text-slate-200">0</p>
+          </div>
+          <div class="rounded-lg border border-slate-700 bg-slate-950/50 p-4">
+            <p class="text-xs font-semibold text-slate-400 uppercase">Families</p>
+            <p id="familyCount" class="mt-1 text-2xl font-bold text-slate-200">0</p>
+          </div>
+          <div class="rounded-lg border border-rose-900/50 bg-rose-950/20 p-4">
+            <p class="text-xs font-semibold text-rose-400 uppercase">Errors</p>
+            <p id="errorCount" class="mt-1 text-2xl font-bold text-rose-200">0</p>
+          </div>
+          <div class="rounded-lg border border-amber-900/50 bg-amber-950/20 p-4">
+            <p class="text-xs font-semibold text-amber-400 uppercase">Warnings</p>
+            <p id="warningCount" class="mt-1 text-2xl font-bold text-amber-200">0</p>
+          </div>
         </div>
+
+        <!-- Issues list -->
+        <div id="issuesList" class="space-y-3"></div>
       </section>
     </main>
 
-    <footer class="mx-auto max-w-7xl px-5 pb-8 text-xs text-slate-600">
-      TreeSleuth runs locally. Review evidence and citations before relying on generated conclusions.
+    <footer class="mx-auto max-w-4xl px-5 pb-8 text-xs text-slate-600">
+      TreeSleuth validates your GEDCOM file for logical inconsistencies. All processing happens locally on your computer.
     </footer>
     <script src="/app.js" defer></script>
   </body>

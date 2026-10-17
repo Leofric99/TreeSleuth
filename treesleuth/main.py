@@ -1,8 +1,9 @@
 import logging
+import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
@@ -84,6 +85,56 @@ def create_app() -> FastAPI:
             issues=response_issues,
             parse_errors=list(index.errors),
         )
+
+    @app.post("/api/validate-gedcom-upload", response_model=GedcomValidationResponse)
+    async def validate_gedcom_upload(file: UploadFile = File(...)) -> GedcomValidationResponse:
+        """Validate an uploaded GEDCOM file for logical errors and inconsistencies."""
+        if not file.filename or not file.filename.endswith(".ged"):
+            raise HTTPException(status_code=400, detail="Only .ged files are accepted")
+        
+        try:
+            # Save uploaded file to temporary directory
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir) / file.filename
+                content = await file.read()
+                temp_path.write_bytes(content)
+                
+                # Parse the GEDCOM file
+                index = await run_in_threadpool(parse_gedcom_files, [temp_path])
+                
+                # Run validation
+                validator = GedcomValidator(index)
+                issues: list[ValidationIssue] = validator.validate()
+                
+                # Convert to response models
+                error_count = sum(1 for issue in issues if issue.severity == "error")
+                warning_count = sum(1 for issue in issues if issue.severity == "warning")
+                
+                response_issues = [
+                    ValidationIssueModel(
+                        severity=issue.severity,
+                        category=issue.category,
+                        person_id=issue.person_id,
+                        person_name=issue.person_name,
+                        message=issue.message,
+                        details=issue.details,
+                    )
+                    for issue in issues
+                ]
+                
+                return GedcomValidationResponse(
+                    gedcom_files=1,
+                    total_individuals=len(index.individuals),
+                    total_families=len(index.families),
+                    issues_found=len(issues),
+                    errors=error_count,
+                    warnings=warning_count,
+                    issues=response_issues,
+                    parse_errors=list(index.errors),
+                )
+        except Exception as exc:
+            logger.exception("Error validating uploaded GEDCOM file %s", file.filename)
+            raise HTTPException(status_code=500, detail=f"Validation failed: {str(exc)}") from exc
 
     static_directory = Path(__file__).resolve().parent.parent / "static"
     app.mount("/", StaticFiles(directory=static_directory, html=True), name="dashboard")
