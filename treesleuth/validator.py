@@ -23,11 +23,11 @@ class ValidationIssue:
 class GedcomValidator:
     """Validates GEDCOM data for logical inconsistencies and timeline errors."""
 
-    # Age constraints
-    MIN_REPRODUCTION_AGE = 12
-    MAX_REPRODUCTION_AGE = 50
-    MAX_LIFESPAN = 110
-    GESTATION_MONTHS = 9
+    # Age constraints (based on historical records and biological reality)
+    MIN_REPRODUCTION_AGE = 15  # Historically, <15 is extremely rare
+    MAX_REPRODUCTION_AGE = 50  # Biologically and historically implausible after 50
+    MAX_LIFESPAN = 110         # Maximum reasonable human lifespan
+    GESTATION_MONTHS = 9       # Allow 9 months after father's death for conception
 
     def __init__(self, index: GedcomIndex):
         """Initialize validator with parsed GEDCOM index."""
