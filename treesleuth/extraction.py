@@ -41,7 +41,7 @@ def vlm_extraction_identity(settings: Settings, model: str) -> str:
     prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
     return (
         f"{EXTRACTION_VERSION}:{model}:{prompt_hash}:"
-        f"dpi{settings.vlm_pdf_dpi}:side{settings.vlm_max_image_side}"
+        f"dpi{settings.vlm_pdf_dpi}:side{settings.vlm_max_image_side}:q{settings.vlm_jpeg_quality}"
     )
 
 
@@ -74,12 +74,13 @@ def _png_bytes(image: Any, max_side: int) -> bytes:
     return _encode_image(image, max_side, quality=85)
 
 
-def _chunk_image(image: Any, grid_size: int = 2) -> list[bytes]:
+def _chunk_image(image: Any, grid_size: int = 2, quality: int = 85) -> list[bytes]:
     """Split image into grid of tiles, encode each as JPEG.
     
     Args:
         image: PIL Image object in RGB format
         grid_size: split into grid_size × grid_size tiles (default 2×2 = 4 tiles)
+        quality: JPEG quality (1-100)
     
     Returns:
         List of JPEG-encoded tile bytes, in row-major order
@@ -98,16 +99,16 @@ def _chunk_image(image: Any, grid_size: int = 2) -> list[bytes]:
             
             if left < w and top < h:
                 tile = image.crop((left, top, right, bottom))
-                # Encode each tile as JPEG with quality 85 for fast compression
+                # Encode each tile as JPEG with specified quality
                 buffer = io.BytesIO()
-                tile.save(buffer, format="JPEG", quality=85, optimize=False)
+                tile.save(buffer, format="JPEG", quality=quality, optimize=False)
                 tiles.append(buffer.getvalue())
     
     return tiles
 
 
-def render_pages(source: Path, *, dpi: int, max_side: int) -> Iterator[bytes]:
-    """Yield each page or frame of a PDF/image as PNG bytes without writing to disk."""
+def render_pages(source: Path, *, dpi: int, max_side: int, jpeg_quality: int) -> Iterator[bytes]:
+    """Yield each page or frame of a PDF/image as JPEG bytes without writing to disk."""
     from PIL import Image
 
     if source.suffix.casefold() == ".pdf":
@@ -117,13 +118,15 @@ def render_pages(source: Path, *, dpi: int, max_side: int) -> Iterator[bytes]:
             for page in pdf:
                 pixmap = page.get_pixmap(dpi=dpi, alpha=False)
                 image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
-                yield _png_bytes(image, max_side)
+                yield _encode_image(image, max_side, quality=jpeg_quality)
         return
 
     with Image.open(source) as image:
         for frame in range(getattr(image, "n_frames", 1)):
-            image.seek(frame)
-            yield _png_bytes(image, max_side)
+            if frame > 0:
+                image.seek(frame)
+            image_data = image.convert("RGB")
+            yield _encode_image(image_data, max_side, quality=jpeg_quality)
 
 
 class VlmExtractor:
@@ -143,6 +146,7 @@ class VlmExtractor:
                 source,
                 dpi=settings.vlm_pdf_dpi,
                 max_side=settings.vlm_max_image_side,
+                jpeg_quality=settings.vlm_jpeg_quality,
             )
         )
         self._on_page = on_page
@@ -261,7 +265,7 @@ class VlmExtractor:
                         
                         # Use 2x2 chunking if image is large, else send as-is
                         if w > 1280 or h > 1280:
-                            image_chunks = _chunk_image(page_image, grid_size=2)
+                            image_chunks = _chunk_image(page_image, grid_size=2, quality=self._settings.vlm_jpeg_quality)
                             logger.debug(
                                 "Page %d of %s: split %dx%d image into %d tiles",
                                 number, source.name, w, h, len(image_chunks)

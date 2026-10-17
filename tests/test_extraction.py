@@ -137,8 +137,8 @@ def test_render_pages_handles_pdf_and_multiframe_tiff(tmp_path: Path) -> None:
     frames = [Image.new("RGB", (4000, 100), color) for color in ("white", "black")]
     frames[0].save(tiff, save_all=True, append_images=frames[1:])
 
-    pdf_pages = list(render_pages(pdf, dpi=72, max_side=2048))
-    tiff_pages = list(render_pages(tiff, dpi=72, max_side=2048))
+    pdf_pages = list(render_pages(pdf, dpi=72, max_side=2048, jpeg_quality=85))
+    tiff_pages = list(render_pages(tiff, dpi=72, max_side=2048, jpeg_quality=85))
 
     assert len(pdf_pages) == 2
     assert len(tiff_pages) == 2
