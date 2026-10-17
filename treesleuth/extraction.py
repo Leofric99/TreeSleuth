@@ -2,6 +2,7 @@ import hashlib
 import io
 import logging
 import threading
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Protocol
@@ -176,7 +177,13 @@ class VlmExtractor:
         """Transcribe a page from a list of image tiles (or a single-element list for whole page)."""
         all_text = []
         for idx, image in enumerate(images, start=1):
+            start_time = time.time()
             try:
+                tile_size_kb = len(image) / 1024
+                logger.debug(
+                    "Transcribing page %d tile %d of %s (%.1f KB, model: %s)",
+                    page, idx, source.name, tile_size_kb, self.model
+                )
                 response = self._vlm_client().chat(
                     model=self.model,
                     messages=[{"role": "user", "content": self._prompt, "images": [image]}],
@@ -184,6 +191,11 @@ class VlmExtractor:
                 )
                 message = response["message"]
                 content = message["content"]
+                elapsed = time.time() - start_time
+                logger.debug(
+                    "Transcribed page %d tile %d of %s in %.2f seconds (%.0f chars/sec)",
+                    page, idx, source.name, elapsed, len(content) / max(0.01, elapsed)
+                )
             except Exception as exc:
                 logger.exception("Vision model failed on page %d (tile %d) of %s", page, idx, source)
                 raise DocumentExtractionError(
@@ -215,6 +227,9 @@ class VlmExtractor:
 
         if not self.model:
             raise DocumentExtractionError(f"A vision model must be selected to transcribe {source}")
+        
+        start_extraction = time.time()
+        logger.info("Starting transcription of %s using model %s", source.name, self.model)
         pages: list[str] = []
         with self._lock:
             try:
@@ -222,6 +237,7 @@ class VlmExtractor:
                     if self._on_page:
                         self._on_page(source, number)
                     
+                    start_page = time.time()
                     # Chunk the page image into tiles for faster processing
                     image_chunks = [page_image_bytes]
                     try:
@@ -232,12 +248,18 @@ class VlmExtractor:
                         # Use 2x2 chunking if image is large, else send as-is
                         if w > 1920 or h > 1920:
                             image_chunks = _chunk_image(page_image, grid_size=2)
+                            logger.debug(
+                                "Page %d of %s: split %dx%d image into %d tiles",
+                                number, source.name, w, h, len(image_chunks)
+                            )
                     except Exception:
                         # If we can't parse the image (e.g., in tests with fake data),
                         # just send it as-is
                         pass
                     
                     pages.append(self._transcribe(source, image_chunks, number))
+                    elapsed = time.time() - start_page
+                    logger.info("Page %d of %s completed in %.2f seconds", number, source.name, elapsed)
                     self._warn_if_not_on_gpu()
             except DocumentExtractionError:
                 raise
@@ -245,13 +267,17 @@ class VlmExtractor:
                 logger.exception("Could not render %s for transcription", source)
                 raise DocumentExtractionError(f"Unable to render {source}: {exc}") from exc
 
+        total_elapsed = time.time() - start_extraction
         if not any(pages):
             raise DocumentExtractionError(f"No readable text was found in {source}")
-        if len(pages) == 1:
-            return pages[0]
-        return "\n\n".join(
+        result = pages[0] if len(pages) == 1 else "\n\n".join(
             f"--- Page {number} ---\n\n{text}" for number, text in enumerate(pages, start=1)
         )
+        logger.info(
+            "Completed transcription of %s (%d pages) in %.2f seconds total",
+            source.name, len(pages), total_elapsed
+        )
+        return result
 
 
 async def ensure_vision_model_available(settings: Settings, model: str) -> None:

@@ -52,6 +52,9 @@ def scan_directory(value: str | Path) -> DirectoryScan:
         for path in entries:
             try:
                 relative_path = path.relative_to(root)
+                # Skip hidden files (starting with dot)
+                if any(part.startswith('.') for part in relative_path.parts):
+                    continue
                 if any(part.casefold() in EXCLUDED_DIRECTORY_NAMES for part in relative_path.parts):
                     continue
                 resolved = ensure_within_root(root, path)

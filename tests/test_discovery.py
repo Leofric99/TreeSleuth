@@ -52,3 +52,22 @@ def test_scan_directory_does_not_follow_directory_symlink_outside_root(tmp_path:
     result = scan_directory(root)
 
     assert not result.document_files
+
+
+def test_scan_directory_skips_hidden_files_and_directories(tmp_path: Path) -> None:
+    (tmp_path / "records").mkdir()
+    (tmp_path / "records" / "visible.txt").write_text("visible", encoding="utf-8")
+    (tmp_path / "records" / ".hidden.txt").write_text("hidden", encoding="utf-8")
+    (tmp_path / ".hidden_dir").mkdir()
+    (tmp_path / ".hidden_dir" / "private.txt").write_text("private", encoding="utf-8")
+    (tmp_path / "tree.ged").write_text("0 HEAD", encoding="utf-8")
+    (tmp_path / ".tree.ged").write_text("0 HEAD", encoding="utf-8")
+
+    result = scan_directory(tmp_path)
+
+    # Only the visible file should be discovered
+    assert len(result.document_files) == 1
+    assert result.document_files[0].relative_path == Path("records") / "visible.txt"
+    assert len(result.gedcom_files) == 1
+    assert result.gedcom_files[0].relative_path == Path("tree.ged")
+
