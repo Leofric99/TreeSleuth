@@ -13,7 +13,7 @@ from treesleuth.discovery import DOCUMENT_SUFFIXES
 logger = logging.getLogger(__name__)
 
 TEXT_SUFFIXES = frozenset({".txt", ".md", ".markdown"})
-EXTRACTION_VERSION = "treesleuth-vlm-extraction-v2"
+EXTRACTION_VERSION = "treesleuth-vlm-extraction-v3"
 
 DEFAULT_PROMPT = (
     "You are transcribing a historical genealogical document page. Transcribe all text exactly as "
@@ -45,8 +45,17 @@ def vlm_extraction_identity(settings: Settings, model: str) -> str:
     )
 
 
-def _png_bytes(image: Any, max_side: int) -> bytes:
-    image = image.convert("RGB")
+def _encode_image(image: Any, max_side: int, quality: int = 85) -> bytes:
+    """Encode PIL Image as JPEG with size constraints.
+    
+    Args:
+        image: PIL Image object in RGB format
+        max_side: maximum width or height in pixels
+        quality: JPEG quality (1-100). Lower = smaller file, faster.
+    
+    Returns:
+        JPEG-encoded bytes
+    """
     longest = max(image.size)
     if longest > max_side:
         scale = max_side / longest
@@ -54,23 +63,27 @@ def _png_bytes(image: Any, max_side: int) -> bytes:
             (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
         )
     buffer = io.BytesIO()
-    image.save(buffer, format="PNG")
+    # Use JPEG for better compression and faster encoding than PNG
+    # Optimize=False skips extra compression work; quality=85 is visually lossless for text
+    image.save(buffer, format="JPEG", quality=quality, optimize=False)
     return buffer.getvalue()
 
 
+def _png_bytes(image: Any, max_side: int) -> bytes:
+    image = image.convert("RGB")
+    return _encode_image(image, max_side, quality=85)
+
+
 def _chunk_image(image: Any, grid_size: int = 2) -> list[bytes]:
-    """Split image into grid of tiles, then downscale and encode each tile as PNG.
+    """Split image into grid of tiles, encode each as JPEG.
     
     Args:
-        image: PIL Image object
+        image: PIL Image object in RGB format
         grid_size: split into grid_size × grid_size tiles (default 2×2 = 4 tiles)
     
     Returns:
-        List of PNG-encoded tile bytes, in row-major order
+        List of JPEG-encoded tile bytes, in row-major order
     """
-    from PIL import Image
-    
-    image = image.convert("RGB")
     w, h = image.size
     tile_w = (w + grid_size - 1) // grid_size
     tile_h = (h + grid_size - 1) // grid_size
@@ -85,8 +98,9 @@ def _chunk_image(image: Any, grid_size: int = 2) -> list[bytes]:
             
             if left < w and top < h:
                 tile = image.crop((left, top, right, bottom))
+                # Encode each tile as JPEG with quality 85 for fast compression
                 buffer = io.BytesIO()
-                tile.save(buffer, format="PNG")
+                tile.save(buffer, format="JPEG", quality=85, optimize=False)
                 tiles.append(buffer.getvalue())
     
     return tiles
@@ -246,7 +260,7 @@ class VlmExtractor:
                         w, h = page_image.size
                         
                         # Use 2x2 chunking if image is large, else send as-is
-                        if w > 1920 or h > 1920:
+                        if w > 1280 or h > 1280:
                             image_chunks = _chunk_image(page_image, grid_size=2)
                             logger.debug(
                                 "Page %d of %s: split %dx%d image into %d tiles",
