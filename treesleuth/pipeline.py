@@ -458,8 +458,11 @@ class PipelineCoordinator:
         has_scanned = any(
             item.path.suffix.casefold() not in TEXT_SUFFIXES for item in scan.document_files
         )
-        extractor = self.extractor
-        identity = "treesleuth-injected-extraction"
+        # Always use real VLM extractor for production; injected extractor only for testing text extraction
+        use_injected = self.extractor is not None and not has_scanned
+        extractor = self.extractor if use_injected else None
+        identity = "treesleuth-injected-extraction" if use_injected else None
+        
         if extractor is None:
             if has_scanned:
                 if not run.vision_model:

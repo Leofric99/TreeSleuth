@@ -205,7 +205,7 @@ class VlmExtractor:
                 response = self._vlm_client().chat(
                     model=self.model,
                     messages=[{"role": "user", "content": self._prompt, "images": [image]}],
-                    options={"temperature": 0},
+                    options={"temperature": 0, "num_ctx": 4096},
                 )
                 message = response["message"]
                 content = message["content"]
