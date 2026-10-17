@@ -2,208 +2,33 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
-from treesleuth.analysis import OllamaServiceError
 from treesleuth.discovery import scan_directory
 from treesleuth.gedcom import parse_gedcom_files
 from treesleuth.logging_config import configure_logging
 from treesleuth.validator import GedcomValidator, ValidationIssue
 from treesleuth.models import (
-    DirectoryAnalyzeRequest,
-    DirectoryAnalyzeResponse,
     GedcomValidationRequest,
     GedcomValidationResponse,
-    PipelineStartRequest,
-    PipelineStartResponse,
-    RunSnapshot,
-    SystemCheckResponse,
-    SurnameMappingRequest,
-    SurnameMappingResponse,
-    StoryGenerationRequest,
     ValidationIssueModel,
 )
 from treesleuth.paths import PathValidationError
-from treesleuth.pipeline import (
-    PipelineCapacityError,
-    PipelineCoordinator,
-    PipelineGenerationInProgressError,
-    PipelinePersonNotFoundError,
-    PipelinePreparationNotReadyError,
-    PipelineRunNotFoundError,
-)
-from treesleuth.surnames import SurnameMappingError, SurnameMappingValidationError
 
 logger = logging.getLogger(__name__)
 
 
-def create_app(coordinator: PipelineCoordinator | None = None) -> FastAPI:
-    pipeline = coordinator or PipelineCoordinator()
+def create_app() -> FastAPI:
+    """Create FastAPI app for GEDCOM validation."""
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         configure_logging()
         yield
-        await pipeline.shutdown()
 
     app = FastAPI(title="TreeSleuth", version="0.1.0", lifespan=lifespan)
-    app.state.pipeline = pipeline
-
-    @app.get("/api/system-check", response_model=SystemCheckResponse)
-    async def system_check() -> SystemCheckResponse:
-        try:
-            models = await pipeline.analyzer.available_models()
-        except OllamaServiceError as exc:
-            logger.warning("API system check failed querying local Ollama: %s", exc, exc_info=True)
-            return SystemCheckResponse(ollama_available=False, error=str(exc))
-        return SystemCheckResponse(ollama_available=True, models=models)
-
-    @app.post("/api/analyze-directory", response_model=DirectoryAnalyzeResponse)
-    async def analyze_directory(request: DirectoryAnalyzeRequest) -> DirectoryAnalyzeResponse:
-        try:
-            scan = await run_in_threadpool(scan_directory, request.path)
-        except PathValidationError as exc:
-            logger.warning("API directory preview rejected path %s: %s", request.path, exc, exc_info=True)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return DirectoryAnalyzeResponse(
-            root=str(scan.root),
-            gedcom_files=len(scan.gedcom_files),
-            document_files=len(scan.document_files),
-            files_by_type=scan.files_by_type,
-            has_gedcom_baseline=bool(scan.gedcom_files),
-        )
-
-    @app.post("/api/run-pipeline", response_model=PipelineStartResponse, status_code=202)
-    async def start_pipeline(request: PipelineStartRequest) -> PipelineStartResponse:
-        try:
-            run = await pipeline.start(request.path, request.model, request.vision_model)
-        except PathValidationError as exc:
-            logger.warning("API pipeline start rejected path %s: %s", request.path, exc, exc_info=True)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except PipelineCapacityError as exc:
-            logger.warning("API pipeline start reached capacity for path %s: %s", request.path, exc, exc_info=True)
-            raise HTTPException(status_code=429, detail=str(exc)) from exc
-        except ValueError as exc:
-            logger.warning(
-                "API pipeline start rejected model %s for path %s: %s",
-                request.model,
-                request.path,
-                exc,
-                exc_info=True,
-            )
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return PipelineStartResponse(
-            run_id=run.run_id,
-            events_url=f"/api/runs/{run.run_id}/events",
-        )
-
-    @app.get("/api/runs/{run_id}", response_model=RunSnapshot)
-    async def get_run(run_id: str) -> RunSnapshot:
-        try:
-            run = pipeline.get_run(run_id)
-        except PipelineRunNotFoundError as exc:
-            logger.warning("API run lookup failed for run %s: %s", run_id, exc, exc_info=True)
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return run.snapshot()
-
-    @app.post("/api/runs/{run_id}/generate", response_model=PipelineStartResponse, status_code=202)
-    async def generate_stories(
-        run_id: str,
-        request: StoryGenerationRequest,
-    ) -> PipelineStartResponse:
-        if request.person_id is not None and request.person_ids is not None:
-            raise HTTPException(
-                status_code=422,
-                detail="Specify either person_id or person_ids, not both",
-            )
-        try:
-            run = await pipeline.generate(run_id, request.person_id, request.person_ids)
-        except PipelineRunNotFoundError as exc:
-            logger.warning("API story generation referenced unknown run %s: %s", run_id, exc, exc_info=True)
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except PipelinePersonNotFoundError as exc:
-            logger.warning("API story generation referenced unknown person in run %s: %s", run_id, exc, exc_info=True)
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except PipelinePreparationNotReadyError as exc:
-            logger.warning("API story generation requested before run %s was ready: %s", run_id, exc)
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except PipelineGenerationInProgressError as exc:
-            logger.warning("API duplicate story generation requested for run %s: %s", run_id, exc)
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except PipelineCapacityError as exc:
-            logger.warning("API story generation reached capacity for run %s: %s", run_id, exc, exc_info=True)
-            raise HTTPException(status_code=429, detail=str(exc)) from exc
-        return PipelineStartResponse(
-            run_id=run.run_id,
-            events_url=f"/api/runs/{run.run_id}/events",
-        )
-
-    @app.put(
-        "/api/runs/{run_id}/surname-mappings",
-        response_model=SurnameMappingResponse,
-    )
-    async def update_surname_mappings(
-        run_id: str,
-        request: SurnameMappingRequest,
-    ) -> SurnameMappingResponse:
-        try:
-            mappings = await pipeline.update_surname_mappings(run_id, request.mappings)
-        except PipelineRunNotFoundError as exc:
-            logger.warning("API surname mapping referenced unknown run %s: %s", run_id, exc, exc_info=True)
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except SurnameMappingValidationError as exc:
-            logger.warning("API surname mapping validation failed for run %s: %s", run_id, exc)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except SurnameMappingError as exc:
-            logger.exception("API could not persist surname mappings for run %s", run_id)
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return SurnameMappingResponse(mappings=mappings)
-
-    @app.get("/api/runs/{run_id}/events")
-    async def stream_run_events(
-        run_id: str,
-        last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
-    ) -> StreamingResponse:
-        try:
-            run = pipeline.get_run(run_id)
-        except PipelineRunNotFoundError as exc:
-            logger.warning("API event stream lookup failed for run %s: %s", run_id, exc, exc_info=True)
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        try:
-            after_sequence = int(last_event_id) if last_event_id is not None else -1
-        except ValueError as exc:
-            logger.warning(
-                "API event stream received invalid Last-Event-ID %r for run %s: %s",
-                last_event_id,
-                run_id,
-                exc,
-                exc_info=True,
-            )
-            raise HTTPException(status_code=400, detail="Last-Event-ID must be an integer") from exc
-        if after_sequence < -1:
-            logger.warning(
-                "API event stream received negative Last-Event-ID %s for run %s",
-                after_sequence,
-                run_id,
-            )
-            raise HTTPException(status_code=400, detail="Last-Event-ID must be -1 or greater")
-
-        async def events():
-            async for event in pipeline.stream_events(run, after_sequence):
-                yield (
-                    f"id: {event.sequence}\n"
-                    f"event: {event.event}\n"
-                    f"data: {event.model_dump_json()}\n\n"
-                )
-
-        return StreamingResponse(
-            events(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
 
     @app.post("/api/validate-gedcom", response_model=GedcomValidationResponse)
     async def validate_gedcom(request: GedcomValidationRequest) -> GedcomValidationResponse:
