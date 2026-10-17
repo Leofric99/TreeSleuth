@@ -1,25 +1,25 @@
 # TreeSleuth
 
-TreeSleuth is a local-first genealogy research workbench. It is designed to
-index GEDCOM trees, extract text from nested research documents, compare source
-claims with family facts, and assemble source-attributed life stories using a
-local Ollama model.
+TreeSleuth is a **GEDCOM data auditor** for genealogists. It validates family tree files for logical inconsistencies, timeline errors, and data-entry mistakes—catching the "impossible" situations that reveal typos or misremembered facts.
+
+## What It Checks
+
+TreeSleuth validates GEDCOM family trees by checking for:
+
+- **Anachronisms:** Mothers giving birth before age 12 or after age 50
+- **Time Travel:** Children born after a parent died (beyond biological possibility)
+- **Lifespan Outliers:** Lifespans exceeding 110 years or death before birth
+- **Marriage Timing:** Marriages before birth or after death dates
+- **Overlap Errors:** Other logical relationship impossibilities in the family tree
+
+No external APIs, no cloud services—just local, deterministic validation of your genealogy data.
 
 ## Requirements
 
 - Python 3.11 or newer
-- Ollama installed and running locally for model-assisted analysis
-- A local Ollama model with enough memory for its selected size; for example,
-  `qwen2.5:14b`
-- For scanned PDFs and images, a local Ollama vision-language model (for
-  example `qwen2.5vl:7b` or `llama3.2-vision`); you choose it in the dashboard
+- A local GEDCOM file or directory containing GEDCOM files (`.ged` extension)
 
-The application supports Windows, macOS, and Linux. Document transcription and
-story generation both run through your local Ollama service, so GPU
-acceleration is whatever Ollama provides (NVIDIA CUDA, AMD ROCm, or Apple
-Metal); TreeSleuth needs no separate GPU setup and logs a warning when Ollama
-reports a model is not fully on the GPU. Research files and analysis stay on
-the local machine.
+That's it. No Ollama, no vision models, no GPU needed.
 
 ## Setup
 
@@ -39,26 +39,6 @@ python3 -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
-Install Ollama using its official installer for your operating system, start
-the local Ollama service, and download a model. For example:
-
-```sh
-ollama pull qwen2.5:14b
-ollama pull qwen2.5vl:7b
-```
-
-The dashboard has two selectors that list the models installed in the local
-Ollama service: the story model, and the vision model used to transcribe PDFs
-and images. Choose smaller installed models if available memory is limited.
-A vision model is only required when the research folder contains PDFs or
-images.
-
-Optional environment variables tune transcription: `TREESLEUTH_VLM_HOST`
-(defaults to `OLLAMA_HOST`), `TREESLEUTH_VLM_TIMEOUT_SECONDS` (per page,
-default 300), `TREESLEUTH_VLM_MAX_IMAGE_SIDE` (default 2048 pixels),
-`TREESLEUTH_VLM_PDF_DPI` (default 200), and `TREESLEUTH_VLM_PROMPT` (replaces
-the transcription prompt).
-
 ## Run
 
 From the repository root with the virtual environment active:
@@ -67,93 +47,58 @@ From the repository root with the virtual environment active:
 python -m treesleuth
 ```
 
-The service binds to loopback by default. Do not change the bind address to a
-network interface unless you understand the privacy implications of exposing
-genealogical research endpoints.
+The service binds to loopback by default (`127.0.0.1:8000`). Open `http://127.0.0.1:8000` in your browser.
 
-API operations, response shapes, and server-sent event names are documented in
-[the API guide](./docs/API.md).
+## API
 
-## Dashboard and local network boundary
+The application exposes a single validation endpoint:
 
-Open `http://127.0.0.1:8000` after starting the service. Check Ollama, enter a
-research-folder path, preview the directory workload, choose an installed
-story model and (for scanned records) a vision model, and start analysis. TreeSleuth loads GEDCOM people first, then extracts
-and correlates documents without generating life stories. People are grouped
-and sorted by surname; use the surname mapping controls to display spelling
-variants under one surname. These mappings are saved under `.cache` for that
-research folder and do not change GEDCOM names or identities.
+```
+POST /api/validate-gedcom
+Content-Type: application/json
 
-People appear in expandable surname groups. To merge spellings, select the
-spelling to move and the surname to keep, then choose **Merge surnames**.
-After preparation finishes, choose **Generate story** for one individual,
-check one or more people and choose **Generate selected stories**, or choose
-**Generate all stories**. The dashboard shows generation progress and errors
-separately; completed and failed people can be opened to review biographies,
-source citations, conflicts, and errors.
+{
+  "path": "/path/to/family/tree/directory"
+}
+```
 
-The default server host is `127.0.0.1`, and the app does not enable
-cross-origin access or an endpoint for arbitrary filesystem reads. The
-Tailwind CDN is used only to download presentation styles; the dashboard sends
-research paths and source content to same-origin TreeSleuth API routes, not to
-the CDN. Keep the service on loopback unless you intentionally configure and
-secure a different network deployment.
+**Response:**
 
-## Source files and extraction cache
+```json
+{
+  "gedcom_files": 1,
+  "total_individuals": 193,
+  "total_families": 51,
+  "issues_found": 3,
+  "errors": 2,
+  "warnings": 1,
+  "issues": [
+    {
+      "severity": "error",
+      "category": "time_travel",
+      "person_id": "I1@file.ged",
+      "person_name": "John Doe",
+      "message": "Birth year 1950 is 10 years after father's death (1940)",
+      "details": {
+        "child_name": "John Doe",
+        "father_name": "James Doe",
+        "child_birth_year": 1950,
+        "father_death_year": 1940,
+        "years_after_death": 10
+      }
+    }
+  ],
+  "parse_errors": []
+}
+```
 
-The directory trawler searches nested folders for `.ged` family trees and
-research documents ending in `.pdf`, `.jpg`, `.jpeg`, `.png`, `.tif`, `.tiff`,
-`.txt`, `.md`, or `.markdown`. PDF and image pages are rendered locally and
-transcribed by the vision model you select; plain-text and Markdown notes are read directly.
-The application stores extracted text and generated results in the repository's
-gitignored `.cache` directory and excludes `.cache`, legacy `.tree_cache`, and
-`output` folders from later scans. A root-specific cache namespace prevents
-different research folders from sharing extracted text.
+## Dashboard
 
-The selected research folder is read but not modified by TreeSleuth. If it
-contains the repository, the repository's own `.cache` is the only allowed
-application-managed write inside it; source discovery still excludes that
-directory. Cache entries are reused only when the source content and extractor
-identity (including the vision model, prompt, and render settings) match. Changed files are extracted again, and cache read/write
-problems are reported while fresh extraction continues when possible.
+The browser interface provides:
 
-An unreadable, empty, corrupt, or unsupported file is reported as an
-individual processing failure; it does not erase successful results from other
-files. GEDCOM parsing failures are likewise reported per tree while other
-valid family trees remain available for analysis.
+1. **Directory Selection** - Choose a folder containing GEDCOM files
+2. **Validation** - Click "Validate" to run checks
+3. **Results** - View issues grouped by severity and category
+4. **Details** - Click any issue to see the involved individuals and specific problem
 
-Transcription can take a while on large PDFs or image files, especially if
-Ollama runs the model on CPU. The live event feed reports the document and page
-being transcribed and emits elapsed-time updates while extraction is still
-running. If a model call fails or times out, or a document contains no readable
-text, TreeSleuth reports that file as a warning and continues with the
-remaining documents. Handwriting transcribed by a model can contain errors;
-unreadable words are marked `[illegible]`.
-
-## Reviewing analysis
-
-GEDCOM-backed matches include the record identity, name evidence, and timeline
-evidence used to associate a source. When more than one person is plausible,
-the association is marked ambiguous rather than silently choosing one. If no
-GEDCOM baseline is available, document groups are explicitly provisional and
-are not presented as verified family identities.
-
-Conflict findings are potential contradictions, not corrections to the family
-tree. Review the source claim, the cited GEDCOM fact, and their source IDs
-before drawing a conclusion. Incomplete evidence and uncertain identity
-matches remain marked uncertain.
-
-Generated biographies are saved under the repository's `.cache` directory as
-per-person `*_LifeStory.txt` files, alongside JSON conflict reports and
-structured analysis data with claim citations. A stable person-identity suffix
-prevents two people with the same display name from overwriting one another. Model
-output is checked for valid structure and known source IDs before it is saved;
-malformed responses or unsupported citations are reported as failures rather
-than treated as verified facts.
-
-## Diagnostic logs
-
-TreeSleuth writes detailed execution diagnostics to `.cache/logs/treesleuth.log`
-in the repository. The log is appended across runs and rotated to bound disk use.
-It can include research paths and other sensitive processing context, so keep
-the checkout private. The `.cache` directory is excluded from Git.
+All processing happens locally. No files are uploaded or sent anywhere.
